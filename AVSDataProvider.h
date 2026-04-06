@@ -71,8 +71,8 @@
 @property (nonatomic, strong) UIWindow *pickerWindow;
 
 // Loop / advance
-@property (nonatomic, assign) int  _framesAdvanced;
-@property (nonatomic, strong) id   _nextLoopReader;  // next AVAssetReader for seamless loop
+@property (nonatomic, assign) int  framesAdvanced;
+@property (nonatomic, strong) id   nextLoopReader;   // next AVAssetReader for seamless loop
 
 // Callback invoked with each decoded frame (set by AVSFrameCoordinator.setDataSource:)
 @property (nonatomic, copy) void(^_avs_cfg_onDec)(CMSampleBufferRef frame);

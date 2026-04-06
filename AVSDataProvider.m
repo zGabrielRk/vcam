@@ -16,6 +16,8 @@
     int               _currentFPS;
     BOOL              _loop;
     CVPixelBufferRef  _staticPixelBuffer;  // retained; used for still-image loop
+    BOOL              _isVideo;
+    BOOL              _isReady;
 }
 
 - (instancetype)init {
@@ -362,11 +364,6 @@ didFinishPicking:(NSArray<PHPickerResult *> *)results {
     }
 }
 
-- (BOOL)isReady { return _isReady; }
-- (BOOL)isVideo { return _isVideo; }
-- (void)setIsReady:(BOOL)r { _isReady = r; }
-- (void)setIsVideo:(BOOL)v { _isVideo = v; }
-
 @end
 
 // -----------------------------------------------------------------------
@@ -394,7 +391,5 @@ didFinishPicking:(NSArray<PHPickerResult *> *)results {
 - (void)_avs_dat_loadImg:(NSURL *)url { }
 - (void)_avs_dat_loadVid:(NSURL *)url { }
 - (void)_avs_dat_cleanExcl:(id)exclusion { }
-- (BOOL)isVideo { return _isVideo; }
-- (BOOL)isReady { return _isReady; }
 
 @end
