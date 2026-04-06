@@ -335,15 +335,26 @@ static void AVSFrameCoordinator_setup_mediaserverd(void) {
 // Setup para SpringBoard (UI flutuante)
 // -----------------------------------------------------------------------
 static void AVSFrameCoordinator_setup_springboard(void) {
-    // Observa UIApplicationDidFinishLaunching
+    // Observa UIApplicationDidFinishLaunchingNotification (nome completo com sufixo)
     CFNotificationCenterAddObserver(
         CFNotificationCenterGetLocalCenter(),
         NULL,
         handleApplicationLaunched,
-        CFSTR("UIApplicationDidFinishLaunching"),
+        CFSTR("UIApplicationDidFinishLaunchingNotification"),
         NULL,
         CFNotificationSuspensionBehaviorDeliverImmediately
     );
+
+    // Fallback: se o SpringBoard já terminou de iniciar antes do tweak carregar,
+    // a notificação já foi postada e o observer acima nunca vai disparar.
+    // Verifica se UIApplication já existe e agenda a inicialização da UI.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        if (!gPanel && [UIApplication sharedApplication] != nil) {
+            NSLog(@"[avsd] SpringBoard already launched, initializing UI via fallback");
+            handleApplicationLaunched(NULL, NULL, NULL, NULL, NULL);
+        }
+    });
 
     // Observa estado de lock
     CFNotificationCenterAddObserver(
