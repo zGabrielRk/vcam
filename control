@@ -1,0 +1,14 @@
+Package: com.lordvcam.avservicesd
+Name: LordVCAM
+Version: (extracted from _avs_cfg_ver at runtime)
+Architecture: iphoneos-arm64
+Description: Virtual camera tweak for jailbroken iOS
+ Intercepts AVFoundation camera pipeline via CydiaSubstrate,
+ replacing the live camera feed with streamed video from PC
+ (WiFi/USB), gallery video/photo, or processed sources.
+ Supports Metal GPU rendering, audio replacement, and
+ real-time color grading.
+Maintainer: LordVCAM <https://t.me/LordVCAM>
+Author: LordVCAM <https://t.me/lordvcam777>
+Section: Tweaks
+Depends: mobilesubstrate, firmware (>= 15.0)
