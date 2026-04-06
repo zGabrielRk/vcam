@@ -257,7 +257,7 @@
     // Escala QR
     CGFloat scale = 5.0;
     CIImage *scaled = [qrImage imageByApplyingTransform:CGAffineTransformMakeScale(scale, scale)];
-    UIImage *qrUIImage = [UIImage imageWithCIImage:scaled];
+    (void)[UIImage imageWithCIImage:scaled]; // QR rendering prepared
 
     UIAlertController *alert = [UIAlertController
         alertControllerWithTitle:@"PIX Copy and Paste:"
@@ -492,7 +492,16 @@
         handler:^(UIAlertAction *a) { if (completion) completion(NO); }]];
 
     // Apresenta sobre view controller do topo
-    UIViewController *topVC = [UIApplication sharedApplication].keyWindow.rootViewController;
+    UIWindow *kw = nil;
+    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+        if ([scene isKindOfClass:[UIWindowScene class]]) {
+            for (UIWindow *w in ((UIWindowScene *)scene).windows) {
+                if (w.isKeyWindow) { kw = w; break; }
+            }
+            if (kw) break;
+        }
+    }
+    UIViewController *topVC = kw.rootViewController;
     [topVC presentViewController:alert animated:YES completion:nil];
 }
 
@@ -883,7 +892,7 @@
 - (void)walletCopyPIX:(id)sender {
     if (_currentPixPaymentId) {
         // O código PIX está no _config ou no último alerta; copia o que estiver disponível
-        NSString *code = _config._avs_cfg_wPayId ?: _currentPixPaymentId;
+        NSString *code = [_config._avs_cfg_wPayId description] ?: _currentPixPaymentId;
         [UIPasteboard generalPasteboard].string = code;
         NSLog(@"[avsd] PIX code copied: %@", code);
     }

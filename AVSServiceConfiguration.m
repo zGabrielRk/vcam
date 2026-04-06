@@ -9,7 +9,11 @@
 #import <sys/sysctl.h>
 #import <dlfcn.h>
 #import <mach/mach.h>
+#import <mach-o/dyld.h>
 #import <signal.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 // Paths de armazenamento (de __cstring)
 static NSString *const kPrefsPath    = @"/var/tmp/com.apple.avfcache/prefs.plist";
@@ -154,7 +158,7 @@ static NSString *const kErrBL02        = @"BL02";  // Frida/debugger
 - (NSString *)_computeSystemID {
     // Método "iokit": lê serial number do IOKit
     io_service_t platformExpert = IOServiceGetMatchingService(
-        kIOMainPortDefault, IOServiceMatching("IOPlatformExpertDevice"));
+        kIOMasterPortDefault, IOServiceMatching("IOPlatformExpertDevice"));
     if (!platformExpert) return @"unknown";
 
     CFStringRef serial = IORegistryEntryCreateCFProperty(

@@ -783,7 +783,7 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)other 
 
 - (CGFloat)addFilterRow:(NSString *)label
                   value:(float)value
-             valueLabel:(UILabel *__strong *)outLabel
+             valueLabel:(UILabel **)outLabel
             minusAction:(SEL)minusAction
              plusAction:(SEL)plusAction
                  toView:(UIView *)parent
