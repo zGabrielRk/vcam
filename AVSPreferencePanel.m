@@ -5,6 +5,7 @@
 #import "AVSPreferencePanel.h"
 #import "AVSFrameCoordinator.h"
 #import "AVSDataProvider.h"
+#import "AVSIPCTransport.h"
 #import <PhotosUI/PhotosUI.h>
 
 @interface AVSPreferencePanel () <PHPickerViewControllerDelegate>
