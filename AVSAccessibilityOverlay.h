@@ -23,5 +23,6 @@
 
 // Registered via CFNotificationCenter for lock state
 @property (nonatomic, assign) BOOL _isScreenLocked;
+@property (nonatomic, assign) int  lockNotifyToken;
 
 @end

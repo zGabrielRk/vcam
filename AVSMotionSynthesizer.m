@@ -41,6 +41,8 @@ static double avs_smooth_noise(double phase, double freq, double amp) {
     double   _currentPanX;
     double   _currentPanY;
 }
+@synthesize _avs_cfg_moveOn;
+@synthesize _avs_cfg_motGain;
 
 - (instancetype)init {
     self = [super init];

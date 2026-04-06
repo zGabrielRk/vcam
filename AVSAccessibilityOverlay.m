@@ -26,7 +26,7 @@ static void _avs_ov_onLock(CFNotificationCenterRef center,
 {
     AVSAccessibilityOverlay *overlay = (__bridge AVSAccessibilityOverlay *)observer;
 
-    BOOL isLocked = AVSLockStateQuery(overlay->_lockNotifyToken);
+    BOOL isLocked = AVSLockStateQuery(overlay.lockNotifyToken);
     overlay._isScreenLocked = isLocked;
 
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -53,7 +53,7 @@ static void _avs_ov_onBlank(CFNotificationCenterRef center,
 @implementation AVSAccessibilityOverlay {
     NSTimer *_foregroundCheckTimer;
     NSString *_lastFrontBundleId;
-    int       _lockNotifyToken;         // token registrado uma vez em init
+    // _lockNotifyToken moved to property in header for C callback access
     SEL       _frontAppSel;             // cache do SEL privado
     BOOL      _frontAppSelResponds;     // cache do respondsToSelector: (invariante)
 }
