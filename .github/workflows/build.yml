@@ -36,6 +36,14 @@ jobs:
         run: |
           git clone --recursive https://github.com/theos/theos.git "$THEOS"
 
+      - name: Download Theos toolchain
+        if: steps.theos-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "$THEOS/toolchain/linux/iphone"
+          curl -fsSL \
+            https://github.com/theos/toolchain/releases/latest/download/linux-x86_64.tar.xz \
+            | tar -xJ -C "$THEOS/toolchain/linux/iphone" --strip-components=1
+
       - name: Install ldid
         if: steps.theos-cache.outputs.cache-hit != 'true'
         run: |
