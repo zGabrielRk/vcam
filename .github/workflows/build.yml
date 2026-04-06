@@ -39,10 +39,9 @@ jobs:
       - name: Download Theos toolchain
         if: steps.theos-cache.outputs.cache-hit != 'true'
         run: |
-          mkdir -p "$THEOS/toolchain/linux/iphone"
           curl -fsSL \
-            https://github.com/theos/toolchain/releases/latest/download/linux-x86_64.tar.xz \
-            | tar -xJ -C "$THEOS/toolchain/linux/iphone" --strip-components=1
+            https://github.com/L1ghtmann/llvm-project/releases/latest/download/iOSToolchain-x86_64.tar.xz \
+            | tar -xJ -C "$THEOS/toolchain/"
 
       - name: Install ldid
         if: steps.theos-cache.outputs.cache-hit != 'true'
