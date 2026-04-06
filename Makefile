@@ -37,11 +37,10 @@ LordVCAM_FRAMEWORKS = \
 	Accelerate \
 	QuartzCore
 
-LordVCAM_PRIVATE_FRAMEWORKS = \
-	IOKit \
-	CMCaptureCore \
-	CMCapture \
-	FrontBoardServices
+# Private frameworks loaded via dlopen() at runtime in KYCHooks.m
+# Do NOT link them statically — they may not exist on all processes
+# and cause dyld load failures on rootless jailbreaks
+# LordVCAM_PRIVATE_FRAMEWORKS = IOKit CMCaptureCore CMCapture FrontBoardServices
 
 LordVCAM_LIBRARIES = substrate
 
