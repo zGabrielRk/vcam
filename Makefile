@@ -1,5 +1,5 @@
 ARCHS = arm64 arm64e
-TARGET = iphone:clang:16.5:15.0
+TARGET = iphone:clang:15.0:15.0
 
 include $(THEOS)/makefiles/common.mk
 
@@ -14,9 +14,13 @@ LordVCAM_FILES = \
 	AVSAudioBridge.m \
 	AVSDataProvider.m \
 	AVSFormatAnalyzer.m \
+	AVSStreamTransport.m \
+	AVSLocalTransport.m \
 	AVSMotionSynthesizer.m \
 	AVSAccessibilityOverlay.m \
 	AVSPreferencePanel.m \
+	AVSPresentationController.m \
+	AVSServiceConfiguration.m \
 	AVSDisplayLayer.m \
 	AVSWSProtocol.m \
 	AVSIPCTransport.m
@@ -35,12 +39,14 @@ LordVCAM_FRAMEWORKS = \
 	Photos \
 	PhotosUI \
 	Accelerate \
-	QuartzCore
+	QuartzCore \
+	Security
 
-# Private frameworks loaded via dlopen() at runtime in KYCHooks.m
-# Do NOT link them statically — they may not exist on all processes
-# and cause dyld load failures on rootless jailbreaks
-# LordVCAM_PRIVATE_FRAMEWORKS = IOKit CMCaptureCore CMCapture FrontBoardServices
+LordVCAM_PRIVATE_FRAMEWORKS = \
+	IOKit \
+	CMCaptureCore \
+	CMCapture \
+	FrontBoardServices
 
 LordVCAM_LIBRARIES = substrate
 

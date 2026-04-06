@@ -1,9 +1,27 @@
 // Tweak.xm
-// LordVCAM - Logos entry point (minimal)
-//
-// All hooks are installed via MSHookMessageEx in KYCHooks.m.
-// This file is intentionally minimal to avoid Logos %hook failures
-// when hooked classes don't exist in the current process.
+// LordVCAM - Logos entry point
+// Must match original structure for MobileLoader compatibility
 
-// No %hook blocks — prevents silent load failures when classes
-// like BWNodeOutput don't exist in SpringBoard or UIKit apps.
+#import <substrate.h>
+#import <Foundation/Foundation.h>
+#import <CoreMedia/CoreMedia.h>
+#import <AVFoundation/AVFoundation.h>
+#import "AVSFrameCoordinator.h"
+#import "AVSRenderPipeline.h"
+#import "AVSMediaDecoder.h"
+#import "KYCHooks.h"
+
+// Hook: BWNodeOutput — kept for Logos compatibility
+// Actual copyNextSampleBuffer hook is in KYCHooks.m via MSHookMessageEx
+%hook BWNodeOutput
+
+- (void)dealloc {
+    %orig;
+}
+
+%end
+
+// Hook: AVCaptureConnection — placeholder for future injection
+%hook AVCaptureConnection
+
+%end

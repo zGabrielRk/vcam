@@ -19,6 +19,7 @@
 #import "AVSMediaDecoder.h"
 #import "AVSAudioBridge.h"
 #import "AVSPreferencePanel.h"
+#import "AVSServiceConfiguration.h"
 #import "AVSWSProtocol.h"
 #import "AVSIPCTransport.h"
 
@@ -58,6 +59,7 @@ void AVSLogWrite(NSString *format, ...) {
 // Singleton global do coordinator
 static AVSFrameCoordinator *gCoordinator = nil;
 static AVSPreferencePanel  *gPanel       = nil;
+static AVSServiceConfiguration *gConfig  = nil;
 
 // -----------------------------------------------------------------------
 // Ponteiros originais de funções hookadas
@@ -238,6 +240,7 @@ static void handleApplicationLaunched(CFNotificationCenterRef center,
                                        CFDictionaryRef userInfo) {
     dispatch_async(dispatch_get_main_queue(), ^{
         gCoordinator = [[AVSFrameCoordinator alloc] init];
+        gConfig = [[AVSServiceConfiguration alloc] init];
         [gCoordinator configureIPCAsProducer];
         gPanel  = [[AVSPreferencePanel alloc] init];
         gPanel.coordinator = gCoordinator;
@@ -331,6 +334,7 @@ static void AVSFrameCoordinator_setup_mediaserverd(void) {
 
     // Inicializa coordinator global + IPC consumer
     gCoordinator = [[AVSFrameCoordinator alloc] init];
+    gConfig = [[AVSServiceConfiguration alloc] init];
     [gCoordinator configureIPCAsConsumer];
     AVSLogWrite(@"[avsd-KYC] KYCCore initialized (IPC consumer)");
 
