@@ -130,14 +130,27 @@ static void hook_BWNodeOutput_dealloc(id self, SEL _cmd) {
 // Hook no método de output do BWNodeOutput que entrega frames
 // Assinatura: -[BWNodeOutput copyNextSampleBuffer]
 static CMSampleBufferRef (*orig_BWNodeOutput_copyNextSampleBuffer)(id, SEL);
+static int _hookCallCount = 0;
 static CMSampleBufferRef hook_BWNodeOutput_copyNextSampleBuffer(id self, SEL _cmd) {
     CMSampleBufferRef orig = orig_BWNodeOutput_copyNextSampleBuffer(self, _cmd);
+    _hookCallCount++;
+    // Log every 60 frames (~2s at 30fps) so syslog isn't flooded
+    if (_hookCallCount % 60 == 1) {
+        NSLog(@"[avsd-HOOK] copyNextSampleBuffer #%d coord=%p replOn=%d feedOn=%d lastPB=%p",
+              _hookCallCount, gCoordinator,
+              gCoordinator ? gCoordinator._avs_cfg_replOn : -1,
+              gCoordinator ? gCoordinator._avs_cfg_feedOn : -1,
+              gCoordinator ? gCoordinator._avs_cfg_lastPB : NULL);
+    }
     if (!gCoordinator) return orig;
 
     // injectReplacementForFrame: é thread-safe (usa _frameLock internamente)
     CMSampleBufferRef replacement = [gCoordinator injectReplacementForFrame:orig];
     if (replacement == orig) return orig;
 
+    if (_hookCallCount % 60 == 1) {
+        NSLog(@"[avsd-HOOK] INJECTED replacement frame #%d", _hookCallCount);
+    }
     if (orig) CFRelease(orig);
     return replacement; // já retido por injectReplacementForFrame:
 }

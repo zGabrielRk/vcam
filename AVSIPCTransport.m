@@ -12,12 +12,20 @@
     uint32_t _lastSurfaceID;
 }
 
+static int _pubCount = 0;
 - (void)publishPixelBuffer:(CVPixelBufferRef)pixelBuffer {
+    _pubCount++;
     if (!pixelBuffer) return;
 
     IOSurfaceRef surface = CVPixelBufferGetIOSurface(pixelBuffer);
     if (!surface) {
-        NSLog(@"[avsd-IPC] WARNING: pixelBuffer is not IOSurface-backed, skipping");
+        if (_pubCount % 60 == 1) {
+            NSLog(@"[avsd-IPC-TX] #%d WARNING: pixelBuffer %p is NOT IOSurface-backed (fmt=%u %zux%zu)",
+                  _pubCount, pixelBuffer,
+                  (unsigned)CVPixelBufferGetPixelFormatType(pixelBuffer),
+                  CVPixelBufferGetWidth(pixelBuffer),
+                  CVPixelBufferGetHeight(pixelBuffer));
+        }
         return;
     }
 
@@ -122,12 +130,19 @@
     }
 }
 
+static int _recvFrameCount = 0;
 - (void)_handleNewFrame {
+    _recvFrameCount++;
     // Read surface metadata if we don't have a surface yet
     if (!_attachedSurface || [self _surfaceIDChanged]) {
         [self _attachSurface];
     }
-    if (!_attachedSurface) return;
+    if (!_attachedSurface) {
+        if (_recvFrameCount % 60 == 1) {
+            NSLog(@"[avsd-IPC-RX] #%d no attached surface", _recvFrameCount);
+        }
+        return;
+    }
 
     // Lock for reading (cross-process safe)
     IOSurfaceLock(_attachedSurface, kIOSurfaceLockReadOnly, NULL);
@@ -143,7 +158,12 @@
 
     IOSurfaceUnlock(_attachedSurface, kIOSurfaceLockReadOnly, NULL);
 
-    if (ret != kCVReturnSuccess || !pixBuf) return;
+    if (ret != kCVReturnSuccess || !pixBuf) {
+        if (_recvFrameCount % 60 == 1) {
+            NSLog(@"[avsd-IPC-RX] #%d CVPixelBuffer create failed ret=%d", _recvFrameCount, ret);
+        }
+        return;
+    }
 
     // Wrap in CMSampleBuffer with current timestamp
     CMVideoFormatDescriptionRef fmtDesc = NULL;
@@ -167,7 +187,12 @@
     CVPixelBufferRelease(pixBuf);
 
     if (sampleBuf && self.onFrameReceived) {
+        if (_recvFrameCount % 60 == 1) {
+            NSLog(@"[avsd-IPC-RX] #%d delivering frame to coordinator", _recvFrameCount);
+        }
         self.onFrameReceived(sampleBuf);
+    } else if (_recvFrameCount % 60 == 1) {
+        NSLog(@"[avsd-IPC-RX] #%d sampleBuf=%p onFrameReceived=%p", _recvFrameCount, sampleBuf, self.onFrameReceived);
     }
     if (sampleBuf) CFRelease(sampleBuf);
 }

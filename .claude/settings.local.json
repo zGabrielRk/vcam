@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)",
+      "Bash(git push:*)",
+      "Bash(ls /c/Users/Gabriel/Pictures/Vcam/*.m)",
+      "Bash(xargs -I {} basename {})"
+    ]
+  }
+}

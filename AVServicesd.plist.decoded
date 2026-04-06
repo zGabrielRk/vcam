@@ -1,0 +1,12 @@
+# AVServicesd.plist — Substrate injection filter (decoded from binary plist)
+# Controls which processes this dylib is injected into
+
+Filter:
+  Bundles:
+    - com.apple.mediaserverd    # Camera/audio server process
+    - com.apple.springboard    # Home screen — for floating UI window
+    - com.apple.lskdd          # Lock screen daemon
+    - com.apple.UIKit          # Any UIKit app (for WebKit camera injection)
+  Executables:
+    - mediaserverd             # Direct executable match
+    - lskdd                    # Lock screen daemon executable

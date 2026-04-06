@@ -153,9 +153,15 @@ static const double kStaleFrameThresholdMs = 250.0;
 // Frame delivery pipeline
 // Chamado por KYCHooks ao interceptar um frame do BWNodeOutput/AVCaptureConnection
 // -----------------------------------------------------------------------
+static int _injectLogCount = 0;
 - (CMSampleBufferRef)injectReplacementForFrame:(CMSampleBufferRef)original {
+    _injectLogCount++;
     // Direct ivar reads: fast-exit guards on camera hook hot path (every frame)
     if (!_avs_cfg_replOn || !_avs_cfg_feedOn) {
+        if (_injectLogCount % 60 == 1) {
+            NSLog(@"[avsd-INJECT] #%d SKIP: replOn=%d feedOn=%d",
+                  _injectLogCount, _avs_cfg_replOn, _avs_cfg_feedOn);
+        }
         return original;
     }
 
@@ -165,6 +171,9 @@ static const double kStaleFrameThresholdMs = 250.0;
     [_frameLock unlock];
 
     if (!replacement) {
+        if (_injectLogCount % 60 == 1) {
+            NSLog(@"[avsd-INJECT] #%d SKIP: lastPB is NULL", _injectLogCount);
+        }
         return original;
     }
 
@@ -173,10 +182,17 @@ static const double kStaleFrameThresholdMs = 250.0;
     double ageMs = (now - _avs_cfg_lastRecv) * 1000.0;
     if (ageMs > kStaleFrameThresholdMs && _avs_cfg_stallRec) {
         _avs_cfg_frmSkip++;
+        if (_injectLogCount % 60 == 1) {
+            NSLog(@"[avsd-INJECT] #%d SKIP STALE: age=%.0fms > %.0fms",
+                  _injectLogCount, ageMs, kStaleFrameThresholdMs);
+        }
         CFRelease(replacement);
         return original;
     }
 
+    if (_injectLogCount % 60 == 1) {
+        NSLog(@"[avsd-INJECT] #%d REPLACED age=%.0fms", _injectLogCount, ageMs);
+    }
     _avs_cfg_frmDlvr++;
     return replacement; // caller deve CFRelease o original se substituir
 }
@@ -184,8 +200,14 @@ static const double kStaleFrameThresholdMs = 250.0;
 // -----------------------------------------------------------------------
 // Callback interno: frame decodificado pelo AVSMediaDecoder
 // -----------------------------------------------------------------------
+static int _decodeLogCount = 0;
 - (void)_onFrameDecoded:(CMSampleBufferRef)frame {
     if (!frame) return;
+    _decodeLogCount++;
+    if (_decodeLogCount % 60 == 1) {
+        NSLog(@"[avsd-DECODE] #%d frame received, ipcSender=%p ipcReceiver=%p",
+              _decodeLogCount, _ipcSender, _ipcReceiver);
+    }
 
     double t0 = CACurrentMediaTime();
     // Direct ivar access: eliminates objc_msgSend overhead at 30-60fps
@@ -296,12 +318,14 @@ static const double kStaleFrameThresholdMs = 250.0;
             ((AVSLocalDataProvider *)source)._avs_cfg_onDec = ^(CMSampleBufferRef frame) {
                 [ws _onFrameDecoded:frame];
             };
+            NSLog(@"[avsd] DataSource callback registered on AVSLocalDataProvider, ipcSender=%p", _ipcSender);
         }
         [source _avs_dat_resume];
         self._avs_cfg_feedOn = YES;
-        NSLog(@"[avsd] Source set: %@", source);
+        NSLog(@"[avsd] Source set: %@ feedOn=YES replOn=%d", source, self._avs_cfg_replOn);
     } else {
         self._avs_cfg_feedOn = NO;
+        NSLog(@"[avsd] Source cleared, feedOn=NO");
     }
 }
 
@@ -310,6 +334,7 @@ static const double kStaleFrameThresholdMs = 250.0;
     if (!enable) {
         self._avs_cfg_feedOn = NO;
     }
+    NSLog(@"[avsd] enableReplacement:%d ipcSender=%p feedOn=%d", enable, _ipcSender, self._avs_cfg_feedOn);
     // Notify mediaserverd of state change via IPC
     if (_ipcSender) {
         [_ipcSender publishEnabled:enable];
@@ -331,11 +356,12 @@ static const double kStaleFrameThresholdMs = 250.0;
         [ws _onFrameDecoded:frame];
     };
     _ipcReceiver.onStateChanged = ^(BOOL enabled) {
+        NSLog(@"[avsd-IPC] Consumer state changed: enabled=%d", enabled);
         ws._avs_cfg_replOn = enabled;
         ws._avs_cfg_feedOn = enabled;
     };
     [_ipcReceiver startListening];
-    NSLog(@"[avsd] Configured as IPC consumer (mediaserverd)");
+    NSLog(@"[avsd] Configured as IPC consumer (mediaserverd) receiver=%p", _ipcReceiver);
 }
 
 // -----------------------------------------------------------------------
