@@ -1,6 +1,6 @@
 Package: com.lordvcam.avservicesd
 Name: LordVCAM
-Version: (extracted from _avs_cfg_ver at runtime)
+Version: 1.0.0
 Architecture: iphoneos-arm64
 Description: Virtual camera tweak for jailbroken iOS
  Intercepts AVFoundation camera pipeline via CydiaSubstrate,
