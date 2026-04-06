@@ -1,0 +1,63 @@
+name: Build
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    env:
+      THEOS: ${{ github.workspace }}/theos
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache Theos
+        uses: actions/cache@v4
+        id: theos-cache
+        with:
+          path: ${{ github.workspace }}/theos
+          key: theos-${{ runner.os }}-16.5
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            git curl make fakeroot clang lld \
+            libplist-dev pkg-config
+
+      - name: Install Theos
+        if: steps.theos-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --recursive https://github.com/theos/theos.git "$THEOS"
+
+      - name: Install ldid
+        if: steps.theos-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL https://github.com/theos/ldid/releases/latest/download/ldid_linux-x86_64 \
+            -o /tmp/ldid
+          sudo install -m755 /tmp/ldid /usr/local/bin/ldid
+
+      - name: Download iOS 16.5 SDK
+        if: steps.theos-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "$THEOS/sdks"
+          curl -fsSL \
+            https://github.com/theos/sdks/releases/latest/download/iPhoneOS16.5.sdk.tar.xz \
+            | tar -xJ -C "$THEOS/sdks"
+
+      - name: Build .deb
+        run: |
+          make package FINALPACKAGE=1 2>&1
+
+      - name: Upload .deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: LordVCAM
+          path: packages/*.deb
+          if-no-files-found: error
