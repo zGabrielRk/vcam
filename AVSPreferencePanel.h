@@ -121,6 +121,7 @@
 - (void)forceHideOnLock;
 - (void)setupWindows;
 - (void)cancelIdleTimer;
+- (void)_togglePanel;
 - (void)_avs_pp_updConn;  // update connection state in UI
 
 // Notification panel

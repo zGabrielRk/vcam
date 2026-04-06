@@ -332,9 +332,61 @@ static void AVSFrameCoordinator_setup_mediaserverd(void) {
 }
 
 // -----------------------------------------------------------------------
+// Hook de Volume: Volume+ e Volume- simultâneos → toggle do painel
+// Baseado nos seletores do binário original:
+//   increaseVolume / decreaseVolume (SpringBoard)
+// -----------------------------------------------------------------------
+static double gVolUpTime  = 0;
+static double gVolDownTime = 0;
+static const double kVolumeComboWindow = 0.4; // segundos para considerar combo
+
+static void (*orig_increaseVolume)(id, SEL);
+static void (*orig_decreaseVolume)(id, SEL);
+
+static void hook_increaseVolume(id self, SEL _cmd) {
+    gVolUpTime = CACurrentMediaTime();
+    if ((gVolUpTime - gVolDownTime) < kVolumeComboWindow && gVolDownTime > 0) {
+        gVolUpTime = 0;
+        gVolDownTime = 0;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (gPanel) [gPanel _togglePanel];
+        });
+        return;
+    }
+    orig_increaseVolume(self, _cmd);
+}
+
+static void hook_decreaseVolume(id self, SEL _cmd) {
+    gVolDownTime = CACurrentMediaTime();
+    if ((gVolDownTime - gVolUpTime) < kVolumeComboWindow && gVolUpTime > 0) {
+        gVolUpTime = 0;
+        gVolDownTime = 0;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (gPanel) [gPanel _togglePanel];
+        });
+        return;
+    }
+    orig_decreaseVolume(self, _cmd);
+}
+
+// -----------------------------------------------------------------------
 // Setup para SpringBoard (UI flutuante)
 // -----------------------------------------------------------------------
 static void AVSFrameCoordinator_setup_springboard(void) {
+    // Hook Volume+/- no SpringBoard para combo de atalho
+    Class springBoardClass = NSClassFromString(@"SpringBoard");
+    if (springBoardClass) {
+        MSHookMessageEx(springBoardClass,
+                        NSSelectorFromString(@"increaseVolume"),
+                        (IMP)hook_increaseVolume,
+                        (IMP *)&orig_increaseVolume);
+        MSHookMessageEx(springBoardClass,
+                        NSSelectorFromString(@"decreaseVolume"),
+                        (IMP)hook_decreaseVolume,
+                        (IMP *)&orig_decreaseVolume);
+        NSLog(@"[avsd-KYC] Volume combo hook installed");
+    }
+
     // Observa UIApplicationDidFinishLaunchingNotification (nome completo com sufixo)
     CFNotificationCenterAddObserver(
         CFNotificationCenterGetLocalCenter(),
