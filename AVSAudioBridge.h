@@ -13,7 +13,7 @@
 
 @property (nonatomic, assign) BOOL   isActive;
 @property (nonatomic, assign) double audioSampleRate;  // e.g. 44100, 48000
-@property (nonatomic, assign) int    _sourceChannels;  // 1=mono, 2=stereo
+@property (nonatomic, assign) int    sourceChannels;   // 1=mono, 2=stereo
 
 // Ring buffer management
 - (void)clearRingBuffer;

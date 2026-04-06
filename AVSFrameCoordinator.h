@@ -8,7 +8,6 @@
 #import "AVSRenderPipeline.h"
 
 @protocol AVSDataProvider;
-@class AVSStreamTransport;
 
 // Injected via CydiaSubstrate into mediaserverd / SpringBoard
 // Hooks: AVCaptureConnection, FigCaptureClientSessionMonitor, BWNodeOutput
@@ -186,6 +185,4 @@
 - (void)setDataSource:(id<AVSDataProvider>)source;
 - (void)enableReplacement:(BOOL)enable;
 - (void)enqueueServerEvent:(NSDictionary *)event;
-- (void)connectTransport:(AVSStreamTransport *)transport;
-
 @end

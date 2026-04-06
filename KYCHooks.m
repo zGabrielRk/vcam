@@ -31,17 +31,9 @@ static AVSPreferencePanel  *gPanel       = nil;
 // BWNodeOutput
 static void (*orig_BWNodeOutput_dealloc)(id self, SEL _cmd);
 
-// AVCaptureConnection - método principal de entrega de frame
-typedef void (*CopyNextFrameFunc)(id, SEL, CMSampleBufferRef, int);
-static CopyNextFrameFunc orig_copyNextFrame = NULL;
-
 // FigCaptureClientSessionMonitor
 typedef id (*SessionMonitorInitFunc)(id, SEL);
 static SessionMonitorInitFunc orig_sessionMonitorInit = NULL;
-
-// AVCapturePhotoOutput
-typedef void (*PhotoOutputFunc)(id, SEL, id, id);
-static PhotoOutputFunc orig_photoOutput = NULL;
 
 // -----------------------------------------------------------------------
 // Crash handler: captura SIGSEGV/SIGBUS/SIGFPE
@@ -161,74 +153,6 @@ static CMSampleBufferRef hook_BWNodeOutput_copyNextSampleBuffer(id self, SEL _cm
 //   [avsd] [WK] #N SLOW-PATH               → software fallback
 //   [avsd-CACHE-AUDIT] #N dst cache front   → auditoria de cache
 // -----------------------------------------------------------------------
-
-// Contadores de injeção por sessão
-static int gFrameCounter = 0;
-
-// Hook no callback de entrega de frame ao app
-typedef void (*SampleBufferDelegateFunc)(id, SEL, id, CMSampleBufferRef, id);
-static SampleBufferDelegateFunc orig_captureOutput_didOutputSampleBuffer;
-
-static void hook_captureOutput_didOutputSampleBuffer(
-    id self, SEL _cmd,
-    id captureOutput,
-    CMSampleBufferRef sampleBuffer,
-    id connection
-) {
-    if (!gCoordinator || !gCoordinator._avs_cfg_replOn) {
-        orig_captureOutput_didOutputSampleBuffer(self, _cmd, captureOutput, sampleBuffer, connection);
-        return;
-    }
-
-    gFrameCounter++;
-    int n = gFrameCounter;
-
-    // Verifica double-injection (se já foi marcado como injetado)
-    // CMSampleBufferGetAttachmentArray detecta marcador "_avs_inj"
-    CMAttachmentBearerRef bearer = (CMAttachmentBearerRef)sampleBuffer;
-    CFTypeRef injMark = CMGetAttachment(bearer, CFSTR("_avs_inj"), NULL);
-    if (injMark) {
-        size_t w = CVPixelBufferGetWidth(CMSampleBufferGetImageBuffer(sampleBuffer));
-        size_t h = CVPixelBufferGetHeight(CMSampleBufferGetImageBuffer(sampleBuffer));
-        NSLog(@"[avsd] [WK] #%d SKIP double-inj %zux%zu", n, w, h);
-        orig_captureOutput_didOutputSampleBuffer(self, _cmd, captureOutput, sampleBuffer, connection);
-        return;
-    }
-
-    // Obtém frame substituto de forma thread-safe
-    CMSampleBufferRef replacement = [gCoordinator injectReplacementForFrame:sampleBuffer];
-    if (replacement == sampleBuffer) {
-        CVImageBufferRef imgBuf = CMSampleBufferGetImageBuffer(sampleBuffer);
-        size_t w = CVPixelBufferGetWidth(imgBuf);
-        size_t h = CVPixelBufferGetHeight(imgBuf);
-        NSLog(@"[avsd] [WK] #%d ORIG (no source at all) %zux%zu", n, w, h);
-        orig_captureOutput_didOutputSampleBuffer(self, _cmd, captureOutput, sampleBuffer, connection);
-        return;
-    }
-
-    CVImageBufferRef dstImg = CMSampleBufferGetImageBuffer(sampleBuffer);
-    CVImageBufferRef srcImg = CMSampleBufferGetImageBuffer(replacement);
-
-    size_t dstW = CVPixelBufferGetWidth(dstImg);
-    size_t dstH = CVPixelBufferGetHeight(dstImg);
-    size_t srcW = CVPixelBufferGetWidth(srcImg);
-
-    // Fast path: VT (VideoToolbox) para escalar/converter
-    // [avsd-AUDIT] #N dst=WxH(ar) src=WxH(ar) crop=N% front=N path=VT
-    float dstAR = (float)dstW / dstH;
-    float srcAR = (float)srcW / CVPixelBufferGetHeight(srcImg);
-    BOOL isFront = NO; // detectado via AVCaptureDevicePosition
-    NSLog(@"[avsd-AUDIT] #%d dst=%zux%zu(%.2f) src=%zux%zu(%.2f) crop=%.0f%% front=%d path=VT",
-          n, dstW, dstH, dstAR, srcW, CVPixelBufferGetHeight(srcImg), srcAR,
-          100.0f * MIN(dstAR/srcAR, srcAR/dstAR), isFront ? 1 : 0);
-
-    // Marca como injetado
-    CMSetAttachment(bearer, CFSTR("_avs_inj"), kCFBooleanTrue,
-                    kCMAttachmentMode_ShouldPropagate);
-
-    // Entrega frame substituto
-    orig_captureOutput_didOutputSampleBuffer(self, _cmd, captureOutput, replacement, connection);
-}
 
 // -----------------------------------------------------------------------
 // Hook: FigCaptureClientSessionMonitor - monitora sessões de captura
