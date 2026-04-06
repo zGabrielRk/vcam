@@ -35,8 +35,7 @@ LordVCAM_FRAMEWORKS = \
 	Photos \
 	PhotosUI \
 	Accelerate \
-	QuartzCore \
-	IOSurface
+	QuartzCore
 
 LordVCAM_PRIVATE_FRAMEWORKS = \
 	IOKit \
@@ -48,6 +47,7 @@ LordVCAM_LIBRARIES = substrate
 
 LordVCAM_CFLAGS  = -fobjc-arc -I$(THEOS_PROJECT_DIR) -I$(THEOS)/include
 LordVCAM_CCFLAGS = $(LordVCAM_CFLAGS)
+LordVCAM_LDFLAGS = -framework IOSurface
 
 INSTALL_TARGET_PROCESSES = SpringBoard mediaserverd
 

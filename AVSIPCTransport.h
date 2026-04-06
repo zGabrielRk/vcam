@@ -5,7 +5,20 @@
 #import <Foundation/Foundation.h>
 #import <CoreMedia/CoreMedia.h>
 #import <CoreVideo/CoreVideo.h>
-#import <IOSurface/IOSurface.h>
+
+// IOSurface C API — forward declarations (header not in Theos SDK)
+typedef struct __IOSurface *IOSurfaceRef;
+extern uint32_t IOSurfaceGetID(IOSurfaceRef surface);
+extern IOSurfaceRef IOSurfaceLookup(uint32_t csid);
+extern size_t IOSurfaceGetWidth(IOSurfaceRef surface);
+extern size_t IOSurfaceGetHeight(IOSurfaceRef surface);
+extern kern_return_t IOSurfaceLock(IOSurfaceRef surface, uint32_t options, uint32_t *seed);
+extern kern_return_t IOSurfaceUnlock(IOSurfaceRef surface, uint32_t options, uint32_t *seed);
+extern IOSurfaceRef CVPixelBufferGetIOSurface(CVPixelBufferRef pixelBuffer);
+extern CVReturn CVPixelBufferCreateWithIOSurface(CFAllocatorRef allocator, IOSurfaceRef surface, CFDictionaryRef pixelBufferAttributes, CVPixelBufferRef *pixelBufferOut);
+
+// IOSurface lock options
+#define kIOSurfaceLockReadOnly 0x00000001
 
 // Darwin notification names
 #define kAVSIPCFrameNotification  "com.avsd.ipc.frame"
