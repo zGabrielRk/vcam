@@ -272,20 +272,6 @@ static const double kStaleFrameThresholdMs = 250.0;
 // -----------------------------------------------------------------------
 // Gerenciamento de fonte de dados
 // -----------------------------------------------------------------------
-// -----------------------------------------------------------------------
-// Conecta um transport (WiFi/USB) ao coordinator
-// Registra callbacks de NAL data e áudio PCM
-// -----------------------------------------------------------------------
-- (void)connectTransport:(AVSStreamTransport *)transport {
-    __weak typeof(self) ws = self;
-    transport.onNALData = ^(NSData *nalData, int seqnum) {
-        [ws submitNALData:nalData sequenceNumber:seqnum serverTimestamp:0];
-    };
-    transport.onAudioPCM = ^(const float *samples, int count, int channels, double rate) {
-        [ws submitAudioPCM:samples count:count channels:channels sampleRate:rate];
-    };
-}
-
 - (void)setDataSource:(id<AVSDataProvider>)source {
     id<AVSDataProvider> old = self._avs_cfg_curSrc;
     if (old) [old _avs_dat_stop];

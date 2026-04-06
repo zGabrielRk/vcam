@@ -9,8 +9,8 @@
 
 // May be absent in older SDK headers; defined in VideoToolbox/VTDecompressionSession.h on device
 #ifndef kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder
-static NSString * const kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder =
-    @"RequireHardwareAcceleratedVideoDecoder";
+static CFStringRef const kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder =
+    CFSTR("RequireHardwareAcceleratedVideoDecoder");
 #endif
 
 // Mapeamento de formato detectado nos cstrings:

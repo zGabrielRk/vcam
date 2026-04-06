@@ -441,9 +441,6 @@ static void AVSFrameCoordinator_setup_uikit_app(void) {
     Class avCapOutput = NSClassFromString(@"AVCaptureVideoDataOutput");
     if (!avCapOutput) return;
 
-    SEL delegateSel = NSSelectorFromString(
-        @"captureOutput:didOutputSampleBuffer:fromConnection:");
-
     // Note: o delegate é um objeto externo; hook via Method Swizzling
     // nas classes concretas que implementam o delegate
 }
