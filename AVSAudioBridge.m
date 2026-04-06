@@ -15,6 +15,7 @@ static const int kRingBufferSize = 48000 * 2 * 2; // 2s @ 48kHz stereo
     int      _audioCredit;
     NSLock  *_lock;
 }
+@synthesize _sourceChannels;
 
 - (instancetype)init {
     self = [super init];

@@ -18,6 +18,9 @@
     CVPixelBufferRef  _staticPixelBuffer;              // retained; used for still-image loop
     CMVideoFormatDescriptionRef _staticFormatDesc;     // cached; avoids 30x/sec alloc
 }
+@synthesize isVideo = _isVideo;
+@synthesize isReady = _isReady;
+@synthesize _framesAdvanced;
 
 - (instancetype)init {
     self = [super init];
@@ -305,6 +308,11 @@
 // -----------------------------------------------------------------------
 - (void)_avs_dat_picker    { }
 - (void)_avs_dat_dismissPkr { }
+
+// PHPickerViewControllerDelegate (required)
+- (void)picker:(PHPickerViewController *)picker didFinishPicking:(NSArray<PHPickerResult *> *)results {
+    [picker dismissViewControllerAnimated:YES completion:nil];
+}
 
 - (void)_avs_dat_cleanExcl:(id)exclusion {
     // Limpa arquivos temporários exceto o especificado
