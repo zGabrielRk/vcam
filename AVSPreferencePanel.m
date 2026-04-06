@@ -25,6 +25,7 @@ static NSString *const kTelegramSupport = @"https://t.me/lordvcam777";
     AVSLocalDataProvider *_activeLocalProvider;  // retained while gallery source is active
     UIWindow             *_pickerHostWindow;     // dismissed after picker completes
 }
+@synthesize _panelDragStart = _panelDragStart;
 
 - (instancetype)init {
     self = [super init];

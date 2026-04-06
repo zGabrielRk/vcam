@@ -15,6 +15,13 @@ static NSString *const kNotifOverlayShow  = @"com.avsd.overlay.show";
 static NSString *const kNotifOverlayHide  = @"com.avsd.overlay.hide";
 static NSString *const kNotifOverlayIcon  = @"com.avsd.overlay.updIcon";
 
+// Class extension to expose _lockNotifyToken ivar to C callbacks defined before @implementation
+@interface AVSAccessibilityOverlay () {
+    @public
+    int _lockNotifyToken;
+}
+@end
+
 // -----------------------------------------------------------------------
 // Callbacks Darwin (C puro — registradas com CFNotificationCenter)
 // -----------------------------------------------------------------------
@@ -53,10 +60,11 @@ static void _avs_ov_onBlank(CFNotificationCenterRef center,
 @implementation AVSAccessibilityOverlay {
     NSTimer *_foregroundCheckTimer;
     NSString *_lastFrontBundleId;
-    int       _lockNotifyToken;         // token registrado uma vez em init
+    // _lockNotifyToken declared in class extension above (for C callback visibility)
     SEL       _frontAppSel;             // cache do SEL privado
     BOOL      _frontAppSelResponds;     // cache do respondsToSelector: (invariante)
 }
+@synthesize _isScreenLocked = _isScreenLocked;
 
 - (instancetype)init {
     self = [super init];
