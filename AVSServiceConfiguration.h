@@ -3,6 +3,7 @@
 // License/subscription management, anti-tamper, API client
 
 #import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
 
 // API base endpoints inferred from strings:
 //   POST  {srvAddr}/auth/report-bug
@@ -89,6 +90,35 @@
 @property (nonatomic, assign) double   _avs_cfg_wLastAmt;
 @property (nonatomic, assign) double   _avs_cfg_wPollStart;
 @property (nonatomic, strong) NSTimer  *_avs_cfg_wPollTmr;
+
+// Device info
+@property (nonatomic, copy) NSString *_avs_cfg_hwMdl;    // hw model e.g. "iPhone15,2"
+@property (nonatomic, copy) NSString *_avs_cfg_devMdl;   // device model name
+@property (nonatomic, copy) NSString *_avs_cfg_devNm;    // device name
+@property (nonatomic, copy) NSString *_avs_cfg_osVer;    // iOS version
+@property (nonatomic, copy) NSString *_avs_cfg_usrEmail; // logged-in user email
+@property (nonatomic, copy) NSString *_avs_cfg_chipVal;  // chip identifier
+
+// Connection / runtime state (shared with PresentationController)
+@property (nonatomic, copy)   NSString *_avs_cfg_connSt;     // connection state
+@property (nonatomic, assign) double    _avs_cfg_curFPS;      // current FPS
+@property (nonatomic, assign) double    _avs_cfg_decEMA;      // decode EMA latency
+@property (nonatomic, strong) UILabel  *_avs_cfg_statusLabel; // status display label
+
+// Ban state
+@property (nonatomic, copy) NSString *_avs_cfg_banText;  // ban reason
+@property (nonatomic, assign) BOOL    _avs_cfg_banType;  // ban type
+@property (nonatomic, copy) NSString *_avs_cfg_banExp;   // ban expiry
+
+// Error / update / maintenance
+@property (nonatomic, copy) NSString *_avs_cfg_lastErr;   // last error
+@property (nonatomic, copy) NSString *_avs_cfg_latest;    // latest available version
+@property (nonatomic, copy) NSString *_avs_cfg_maintMsg;  // maintenance message
+@property (nonatomic, copy) NSString *_avs_cfg_maintETA;  // maintenance ETA
+
+// Callbacks
+@property (nonatomic, copy) void(^_avs_cfg_dismissCb)(void);
+@property (nonatomic, copy) void(^_avs_cfg_hideCb)(void);
 
 // Lock screen detection
 @property (nonatomic, assign) BOOL _isScreenLocked;

@@ -6,17 +6,19 @@
 #import <CoreMedia/CoreMedia.h>
 #import <AVFoundation/AVFoundation.h>
 #import <UIKit/UIKit.h>
-#import <QuartzCore/QuartzCore.h>
 #import <substrate.h>
 #import <dlfcn.h>
+#import <objc/runtime.h>
 #import <signal.h>
 #import <execinfo.h>
 #import <mach/mach.h>
 #import <os/log.h>
+#import <QuartzCore/QuartzCore.h>
 
 #import "AVSFrameCoordinator.h"
 #import "AVSRenderPipeline.h"
 #import "AVSMediaDecoder.h"
+#import "AVSStreamTransport.h"
 #import "AVSAudioBridge.h"
 #import "AVSPreferencePanel.h"
 #import "AVSServiceConfiguration.h"
@@ -25,7 +27,6 @@
 
 // -----------------------------------------------------------------------
 // File-based logging — immune to iOS syslog filtering
-// Writes to /var/tmp/com.apple.avfcache/avsd.log
 // -----------------------------------------------------------------------
 static NSString *const kAVSLogPath = @"/var/tmp/com.apple.avfcache/avsd.log";
 static NSLock *gLogLock = nil;
@@ -39,7 +40,6 @@ void AVSLogWrite(NSString *format, ...) {
     NSString *ts = [NSString stringWithFormat:@"%.3f", CACurrentMediaTime()];
     NSString *line = [NSString stringWithFormat:@"[%@] %@\n", ts, msg];
 
-    // Write to file (always works)
     if (!gLogLock) gLogLock = [[NSLock alloc] init];
     [gLogLock lock];
     NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:kAVSLogPath];
@@ -52,7 +52,6 @@ void AVSLogWrite(NSString *format, ...) {
     [fh closeFile];
     [gLogLock unlock];
 
-    // os_log with ERROR level — NEVER filtered by iOS, always visible in idevicesyslog
     os_log_error(OS_LOG_DEFAULT, "%{public}@", msg);
 }
 
@@ -68,9 +67,17 @@ static AVSServiceConfiguration *gConfig  = nil;
 // BWNodeOutput
 static void (*orig_BWNodeOutput_dealloc)(id self, SEL _cmd);
 
+// AVCaptureConnection - método principal de entrega de frame
+typedef void (*CopyNextFrameFunc)(id, SEL, CMSampleBufferRef, int);
+static CopyNextFrameFunc orig_copyNextFrame = NULL;
+
 // FigCaptureClientSessionMonitor
 typedef id (*SessionMonitorInitFunc)(id, SEL);
 static SessionMonitorInitFunc orig_sessionMonitorInit = NULL;
+
+// AVCapturePhotoOutput
+typedef void (*PhotoOutputFunc)(id, SEL, id, id);
+static PhotoOutputFunc orig_photoOutput = NULL;
 
 // -----------------------------------------------------------------------
 // Crash handler: captura SIGSEGV/SIGBUS/SIGFPE
@@ -159,34 +166,21 @@ static void avs_setup_crash_handler(void) {
 // BWNodeOutput é o nó de saída do grafo de captura em mediaserverd
 // -----------------------------------------------------------------------
 static void hook_BWNodeOutput_dealloc(id self, SEL _cmd) {
-    AVSLogWrite(@"[avsd] BWNodeOutput dealloc");
+    NSLog(@"[avsd] BWNodeOutput dealloc");
     orig_BWNodeOutput_dealloc(self, _cmd);
 }
 
 // Hook no método de output do BWNodeOutput que entrega frames
 // Assinatura: -[BWNodeOutput copyNextSampleBuffer]
 static CMSampleBufferRef (*orig_BWNodeOutput_copyNextSampleBuffer)(id, SEL);
-static int _hookCallCount = 0;
 static CMSampleBufferRef hook_BWNodeOutput_copyNextSampleBuffer(id self, SEL _cmd) {
     CMSampleBufferRef orig = orig_BWNodeOutput_copyNextSampleBuffer(self, _cmd);
-    _hookCallCount++;
-    // Log every 60 frames (~2s at 30fps) so syslog isn't flooded
-    if (_hookCallCount % 60 == 1) {
-        AVSLogWrite(@"[avsd-HOOK] copyNextSampleBuffer #%d coord=%p replOn=%d feedOn=%d lastPB=%p",
-              _hookCallCount, gCoordinator,
-              gCoordinator ? gCoordinator._avs_cfg_replOn : -1,
-              gCoordinator ? gCoordinator._avs_cfg_feedOn : -1,
-              gCoordinator ? gCoordinator._avs_cfg_lastPB : NULL);
-    }
     if (!gCoordinator) return orig;
 
     // injectReplacementForFrame: é thread-safe (usa _frameLock internamente)
     CMSampleBufferRef replacement = [gCoordinator injectReplacementForFrame:orig];
     if (replacement == orig) return orig;
 
-    if (_hookCallCount % 60 == 1) {
-        AVSLogWrite(@"[avsd-HOOK] INJECTED replacement frame #%d", _hookCallCount);
-    }
     if (orig) CFRelease(orig);
     return replacement; // já retido por injectReplacementForFrame:
 }
@@ -204,12 +198,80 @@ static CMSampleBufferRef hook_BWNodeOutput_copyNextSampleBuffer(id self, SEL _cm
 //   [avsd-CACHE-AUDIT] #N dst cache front   → auditoria de cache
 // -----------------------------------------------------------------------
 
+// Contadores de injeção por sessão
+static _Atomic(int) gFrameCounter = 0;
+
+// Hook no callback de entrega de frame ao app
+typedef void (*SampleBufferDelegateFunc)(id, SEL, id, CMSampleBufferRef, id);
+static SampleBufferDelegateFunc orig_captureOutput_didOutputSampleBuffer;
+
+static void hook_captureOutput_didOutputSampleBuffer(
+    id self, SEL _cmd,
+    id captureOutput,
+    CMSampleBufferRef sampleBuffer,
+    id connection
+) {
+    if (!gCoordinator || !gCoordinator._avs_cfg_replOn) {
+        orig_captureOutput_didOutputSampleBuffer(self, _cmd, captureOutput, sampleBuffer, connection);
+        return;
+    }
+
+    int n = ++gFrameCounter;
+
+    // Verifica double-injection (se já foi marcado como injetado)
+    // CMSampleBufferGetAttachmentArray detecta marcador "_avs_inj"
+    CMAttachmentBearerRef bearer = (CMAttachmentBearerRef)sampleBuffer;
+    CFTypeRef injMark = CMGetAttachment(bearer, CFSTR("_avs_inj"), NULL);
+    if (injMark) {
+        size_t w = CVPixelBufferGetWidth(CMSampleBufferGetImageBuffer(sampleBuffer));
+        size_t h = CVPixelBufferGetHeight(CMSampleBufferGetImageBuffer(sampleBuffer));
+        NSLog(@"[avsd] [WK] #%d SKIP double-inj %zux%zu", n, w, h);
+        orig_captureOutput_didOutputSampleBuffer(self, _cmd, captureOutput, sampleBuffer, connection);
+        return;
+    }
+
+    // Obtém frame substituto de forma thread-safe
+    CMSampleBufferRef replacement = [gCoordinator injectReplacementForFrame:sampleBuffer];
+    if (replacement == sampleBuffer) {
+        CVImageBufferRef imgBuf = CMSampleBufferGetImageBuffer(sampleBuffer);
+        size_t w = CVPixelBufferGetWidth(imgBuf);
+        size_t h = CVPixelBufferGetHeight(imgBuf);
+        NSLog(@"[avsd] [WK] #%d ORIG (no source at all) %zux%zu", n, w, h);
+        orig_captureOutput_didOutputSampleBuffer(self, _cmd, captureOutput, sampleBuffer, connection);
+        return;
+    }
+
+    CVImageBufferRef dstImg = CMSampleBufferGetImageBuffer(sampleBuffer);
+    CVImageBufferRef srcImg = CMSampleBufferGetImageBuffer(replacement);
+
+    size_t dstW = CVPixelBufferGetWidth(dstImg);
+    size_t dstH = CVPixelBufferGetHeight(dstImg);
+    size_t srcW = CVPixelBufferGetWidth(srcImg);
+
+    // Fast path: VT (VideoToolbox) para escalar/converter
+    // [avsd-AUDIT] #N dst=WxH(ar) src=WxH(ar) crop=N% front=N path=VT
+    float dstAR = (float)dstW / dstH;
+    float srcAR = (float)srcW / CVPixelBufferGetHeight(srcImg);
+    BOOL isFront = NO; // detectado via AVCaptureDevicePosition
+    NSLog(@"[avsd-AUDIT] #%d dst=%zux%zu(%.2f) src=%zux%zu(%.2f) crop=%.0f%% front=%d path=VT",
+          n, dstW, dstH, dstAR, srcW, CVPixelBufferGetHeight(srcImg), srcAR,
+          100.0f * MIN(dstAR/srcAR, srcAR/dstAR), isFront ? 1 : 0);
+
+    // Marca como injetado
+    CMSetAttachment(bearer, CFSTR("_avs_inj"), kCFBooleanTrue,
+                    kCMAttachmentMode_ShouldPropagate);
+
+    // Entrega frame substituto
+    orig_captureOutput_didOutputSampleBuffer(self, _cmd, captureOutput, replacement, connection);
+    CFRelease(replacement); // injectReplacementForFrame: retorna com retain
+}
+
 // -----------------------------------------------------------------------
 // Hook: FigCaptureClientSessionMonitor - monitora sessões de captura
 // -----------------------------------------------------------------------
 static id hook_FigCaptureClientSessionMonitor_init(id self, SEL _cmd) {
     id result = orig_sessionMonitorInit(self, _cmd);
-    AVSLogWrite(@"[avsd-KYC] KYCSession initialized (FigCaptureClientSessionMonitor)");
+    NSLog(@"[avsd-KYC] KYCSession initialized (FigCaptureClientSessionMonitor)");
     return result;
 }
 
@@ -222,11 +284,14 @@ static void hook_addAuxImages(id self, SEL _cmd, int scheme,
                                CMSampleBufferRef sampleBuf, id meta,
                                id settings, id flags) {
     // Se replacement ativo, substitui o sample buffer antes de encodar
+    CMSampleBufferRef replacement = NULL;
     if (gCoordinator) {
-        CMSampleBufferRef replacement = [gCoordinator injectReplacementForFrame:sampleBuf];
+        replacement = [gCoordinator injectReplacementForFrame:sampleBuf];
         if (replacement != sampleBuf) sampleBuf = replacement;
+        else replacement = NULL; // não precisa release
     }
     orig_addAuxImages(self, _cmd, scheme, sampleBuf, meta, settings, flags);
+    if (replacement) CFRelease(replacement);
 }
 
 // -----------------------------------------------------------------------
@@ -245,7 +310,7 @@ static void handleApplicationLaunched(CFNotificationCenterRef center,
         gPanel  = [[AVSPreferencePanel alloc] init];
         gPanel.coordinator = gCoordinator;
         [gPanel setupWindows];
-        AVSLogWrite(@"[avsd] SpringBoard UI initialized (IPC producer)");
+        NSLog(@"[avsd] SpringBoard UI initialized (IPC producer)");
     });
 }
 
@@ -279,14 +344,8 @@ static void avs_write_probe(NSString *processName) {
     [probe appendFormat:@"timestamp: %f\n", CACurrentMediaTime()];
 
     [probe writeToFile:probePath atomically:YES encoding:NSUTF8StringEncoding error:nil];
-    AVSLogWrite(@"[avsd] [PROBE] %@", probePath);
+    NSLog(@"[avsd] [PROBE] %@", probePath);
 }
-
-// -----------------------------------------------------------------------
-// Forward declarations
-static void AVSFrameCoordinator_setup_mediaserverd(void);
-static void AVSFrameCoordinator_setup_springboard(void);
-static void AVSFrameCoordinator_setup_uikit_app(void);
 
 // -----------------------------------------------------------------------
 // Constructor: injetado em cada processo pelo CydiaSubstrate
@@ -295,7 +354,7 @@ __attribute__((constructor))
 static void avs_ctor(void) {
     @autoreleasepool {
         NSString *processName = [NSProcessInfo processInfo].processName;
-        AVSLogWrite(@"[avsd-KYC] ctor starting in %@", processName);
+        NSLog(@"[avsd-KYC] ctor starting in %@", processName);
 
         // Garante diretório de cache
         [[NSFileManager defaultManager]
@@ -329,20 +388,20 @@ static void AVSFrameCoordinator_setup_mediaserverd(void) {
         "/System/Library/PrivateFrameworks/CMCapture.framework/CMCapture", RTLD_LAZY);
     void *frontBoard = dlopen(
         "/System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices", RTLD_LAZY);
-    AVSLogWrite(@"[avsd-KYC] dlopen complete");
+    NSLog(@"[avsd-KYC] dlopen complete");
     (void)cmCaptureCore; (void)cmCapture; (void)frontBoard;
 
     // Inicializa coordinator global + IPC consumer
     gCoordinator = [[AVSFrameCoordinator alloc] init];
     gConfig = [[AVSServiceConfiguration alloc] init];
     [gCoordinator configureIPCAsConsumer];
-    AVSLogWrite(@"[avsd-KYC] KYCCore initialized (IPC consumer)");
+    NSLog(@"[avsd-KYC] KYCCore initialized (IPC consumer)");
 
     // Hook BWNodeOutput
     Class bwNodeOutputClass = NSClassFromString(@"BWNodeOutput");
     if (bwNodeOutputClass) {
         MSHookMessageEx(bwNodeOutputClass,
-                        sel_registerName("dealloc"),
+                        @selector(dealloc),
                         (IMP)hook_BWNodeOutput_dealloc,
                         (IMP *)&orig_BWNodeOutput_dealloc);
 
@@ -351,7 +410,7 @@ static void AVSFrameCoordinator_setup_mediaserverd(void) {
                         copyNextSel,
                         (IMP)hook_BWNodeOutput_copyNextSampleBuffer,
                         (IMP *)&orig_BWNodeOutput_copyNextSampleBuffer);
-        AVSLogWrite(@"[avsd-KYC] KYCMetadata initialized");
+        NSLog(@"[avsd-KYC] KYCMetadata initialized");
     }
 
     // Hook FigCaptureClientSessionMonitor
@@ -361,7 +420,7 @@ static void AVSFrameCoordinator_setup_mediaserverd(void) {
                         @selector(init),
                         (IMP)hook_FigCaptureClientSessionMonitor_init,
                         (IMP *)&orig_sessionMonitorInit);
-        AVSLogWrite(@"[avsd-KYC] KYCSession initialized (FigCaptureClientSessionMonitor)");
+        NSLog(@"[avsd-KYC] KYCSession initialized (FigCaptureClientSessionMonitor)");
     }
 
     // Hook BWStillImageScalerNode + BWPhotoEncoderNode para fotos
@@ -372,114 +431,121 @@ static void AVSFrameCoordinator_setup_mediaserverd(void) {
         MSHookMessageEx(photoEncoderClass, addAuxSel,
                         (IMP)hook_addAuxImages,
                         (IMP *)&orig_addAuxImages);
-        AVSLogWrite(@"[avsd-KYC] KYCPhoto initialized");
-        AVSLogWrite(@"[avsd-KYC] KYCPhotoEncoder initialized (A11+)");
+        NSLog(@"[avsd-KYC] KYCPhoto initialized");
+        NSLog(@"[avsd-KYC] KYCPhotoEncoder initialized (A11+)");
+
+        // Segunda variante com scaleFactor: (A14+ / iPhone 12+)
+        SEL addAuxScaleSel = NSSelectorFromString(
+            @"_addAuxImagesIfNeededForEncodingScheme:sampleBuffer:metadata:stillImageSettings:scaleFactor:processingFlags:embedThumbToCompressedImage:");
+        if ([photoEncoderClass instancesRespondToSelector:addAuxScaleSel]) {
+            MSHookMessageEx(photoEncoderClass, addAuxScaleSel,
+                            (IMP)hook_addAuxImagesScale,
+                            (IMP *)&orig_addAuxImagesScale);
+            NSLog(@"[avsd-KYC] KYCPhotoEncoder scaleFactor variant hooked (A14+)");
+        }
     }
 
     // Hook orientação via FBSOrientationUpdate
     Class fbsOrientClass = NSClassFromString(@"FBSOrientationUpdate");
     if (fbsOrientClass) {
-        AVSLogWrite(@"[avsd-KYC] KYCOrientation initialized (FBSOrientationUpdate)");
+        NSLog(@"[avsd-KYC] KYCOrientation initialized (FBSOrientationUpdate)");
     }
 
-    AVSLogWrite(@"[avsd-KYC] init complete");
+    NSLog(@"[avsd-KYC] init complete");
 }
 
 // -----------------------------------------------------------------------
 // Hook de Volume: Volume+ e Volume- simultâneos → toggle do painel
-// iOS 15+ usa SBVolumeControl em vez de SpringBoard para volume
+// Baseado nos seletores do binário original:
+//   increaseVolume / decreaseVolume (SpringBoard)
+//   handleVolumeUpButtonPress / handleVolumeDownButtonPress (tweak)
+//   _avs_ov_showPnlC (combo toggle)
 // -----------------------------------------------------------------------
-static double gVolUpTime  = 0;
-static double gVolDownTime = 0;
-static const double kVolumeComboWindow = 0.5;
+static _Atomic(double) gVolUpTime  = 0;
+static _Atomic(double) gVolDownTime = 0;
+static const double kVolumeComboWindow = 0.4; // segundos para considerar combo
 
-static void (*orig_volUp)(id, SEL);
-static void (*orig_volDown)(id, SEL);
+static void (*orig_increaseVolume)(id, SEL);
+static void (*orig_decreaseVolume)(id, SEL);
 
-static void _avs_checkVolumeCombo(void) {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        if (gPanel) [gPanel _togglePanel];
-    });
-}
-
-static void hook_volUp(id self, SEL _cmd) {
+static void hook_increaseVolume(id self, SEL _cmd) {
     gVolUpTime = CACurrentMediaTime();
+    // Se Volume- foi pressionado dentro da janela de combo → toggle painel
     if ((gVolUpTime - gVolDownTime) < kVolumeComboWindow && gVolDownTime > 0) {
         gVolUpTime = 0;
         gVolDownTime = 0;
-        _avs_checkVolumeCombo();
-        return;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (gPanel) [gPanel _togglePanel];
+        });
+        return; // engole o evento de volume
     }
-    orig_volUp(self, _cmd);
+    orig_increaseVolume(self, _cmd);
 }
 
-static void hook_volDown(id self, SEL _cmd) {
+static void hook_decreaseVolume(id self, SEL _cmd) {
     gVolDownTime = CACurrentMediaTime();
+    // Se Volume+ foi pressionado dentro da janela de combo → toggle painel
     if ((gVolDownTime - gVolUpTime) < kVolumeComboWindow && gVolUpTime > 0) {
         gVolUpTime = 0;
         gVolDownTime = 0;
-        _avs_checkVolumeCombo();
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (gPanel) [gPanel _togglePanel];
+        });
         return;
     }
-    orig_volDown(self, _cmd);
-}
-
-static BOOL _avs_tryHookVolume(Class cls, NSString *upSel, NSString *downSel) {
-    if (!cls) return NO;
-    if (![cls instancesRespondToSelector:NSSelectorFromString(upSel)]) return NO;
-    if (![cls instancesRespondToSelector:NSSelectorFromString(downSel)]) return NO;
-
-    MSHookMessageEx(cls,
-                    NSSelectorFromString(upSel),
-                    (IMP)hook_volUp,
-                    (IMP *)&orig_volUp);
-    MSHookMessageEx(cls,
-                    NSSelectorFromString(downSel),
-                    (IMP)hook_volDown,
-                    (IMP *)&orig_volDown);
-    AVSLogWrite(@"[avsd-KYC] Volume combo hooked on %@ (%@ / %@)",
-          NSStringFromClass(cls), upSel, downSel);
-    return YES;
+    orig_decreaseVolume(self, _cmd);
 }
 
 // -----------------------------------------------------------------------
 // Setup para SpringBoard (UI flutuante)
 // -----------------------------------------------------------------------
 static void AVSFrameCoordinator_setup_springboard(void) {
-    // Hook volume buttons — try multiple classes for iOS version compat
-    BOOL hooked =
-        _avs_tryHookVolume(NSClassFromString(@"SBVolumeControl"),
-                           @"increaseVolume", @"decreaseVolume") ||
-        _avs_tryHookVolume(NSClassFromString(@"VolumeControl"),
-                           @"increaseVolume", @"decreaseVolume") ||
-        _avs_tryHookVolume(NSClassFromString(@"SpringBoard"),
-                           @"increaseVolume", @"decreaseVolume") ||
-        _avs_tryHookVolume(NSClassFromString(@"SpringBoard"),
-                           @"handleVolumeUpButtonPress", @"handleVolumeDownButtonPress");
-    if (!hooked) {
-        AVSLogWrite(@"[avsd-KYC] WARNING: Could not hook volume buttons on any known class");
+    // Hook Volume+/- no SpringBoard para combo de atalho
+    Class springBoardClass = NSClassFromString(@"SpringBoard");
+    if (springBoardClass) {
+        MSHookMessageEx(springBoardClass,
+                        NSSelectorFromString(@"increaseVolume"),
+                        (IMP)hook_increaseVolume,
+                        (IMP *)&orig_increaseVolume);
+        MSHookMessageEx(springBoardClass,
+                        NSSelectorFromString(@"decreaseVolume"),
+                        (IMP)hook_decreaseVolume,
+                        (IMP *)&orig_decreaseVolume);
+        NSLog(@"[avsd-KYC] Volume combo hook installed");
     }
 
-    // Observa UIApplicationDidFinishLaunchingNotification (nome completo com sufixo)
+    // Hook home gesture para esconder painel ao sair do app
+    Class sbHomeGesture = NSClassFromString(@"SBHomeHardwareButton");
+    if (!sbHomeGesture) sbHomeGesture = NSClassFromString(@"SBSystemGestureManager");
+    if (sbHomeGesture) {
+        SEL homeGestureSel = NSSelectorFromString(@"_handleHomeGesture:");
+        if ([sbHomeGesture instancesRespondToSelector:homeGestureSel]) {
+            MSHookMessageEx(sbHomeGesture, homeGestureSel,
+                            (IMP)hook_handleHomeGesture,
+                            (IMP *)&orig_handleHomeGesture);
+            NSLog(@"[avsd-KYC] Home gesture hook installed");
+        }
+    }
+
+    // Observa mudança de app em primeiro plano
     CFNotificationCenterAddObserver(
-        CFNotificationCenterGetLocalCenter(),
+        CFNotificationCenterGetDarwinNotifyCenter(),
         NULL,
-        handleApplicationLaunched,
-        CFSTR("UIApplicationDidFinishLaunchingNotification"),
+        _handleApplicationStateChange,
+        CFSTR("com.apple.springboard.activeapp"),
         NULL,
         CFNotificationSuspensionBehaviorDeliverImmediately
     );
 
-    // Fallback: se o SpringBoard já terminou de iniciar antes do tweak carregar,
-    // a notificação já foi postada e o observer acima nunca vai disparar.
-    // Verifica se UIApplication já existe e agenda a inicialização da UI.
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{
-        if (!gPanel && [UIApplication sharedApplication] != nil) {
-            AVSLogWrite(@"[avsd] SpringBoard already launched, initializing UI via fallback");
-            handleApplicationLaunched(NULL, NULL, NULL, NULL, NULL);
-        }
-    });
+    // Observa UIApplicationDidFinishLaunching
+    CFNotificationCenterAddObserver(
+        CFNotificationCenterGetLocalCenter(),
+        NULL,
+        handleApplicationLaunched,
+        CFSTR("UIApplicationDidFinishLaunching"),
+        NULL,
+        CFNotificationSuspensionBehaviorDeliverImmediately
+    );
 
     // Observa estado de lock
     CFNotificationCenterAddObserver(
@@ -490,17 +556,103 @@ static void AVSFrameCoordinator_setup_springboard(void) {
         NULL,
         CFNotificationSuspensionBehaviorDeliverImmediately
     );
+
+    // Fallback: se o SpringBoard já terminou de iniciar antes do tweak carregar,
+    // a notificação já foi postada e o observer acima nunca vai disparar.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        if (!gPanel && [UIApplication sharedApplication] != nil) {
+            NSLog(@"[avsd] SpringBoard already launched, initializing UI via fallback");
+            handleApplicationLaunched(NULL, NULL, NULL, NULL, NULL);
+        }
+    });
+}
+
+// -----------------------------------------------------------------------
+// Handlers de estado de aplicação e gestos (SpringBoard)
+// -----------------------------------------------------------------------
+static void _handleApplicationStateChange(CFNotificationCenterRef center,
+                                           void *observer,
+                                           CFStringRef name,
+                                           const void *object,
+                                           CFDictionaryRef userInfo) {
+    // Detecta mudança de app em primeiro plano
+    // Pausa stream quando app de câmera nativo abre para evitar conflito
+    NSString *notifName = (__bridge NSString *)name;
+    if ([notifName containsString:@"foregroundApp"]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (gPanel) [gPanel forceHideOnLock];
+        });
+    }
+}
+
+static void (*orig_handleHomeGesture)(id, SEL, id);
+static void hook_handleHomeGesture(id self, SEL _cmd, id gesture) {
+    // Esconde painel ao voltar para Home
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (gPanel && gPanel.panelVisible) {
+            [gPanel dismiss];
+        }
+    });
+    orig_handleHomeGesture(self, _cmd, gesture);
+}
+
+// -----------------------------------------------------------------------
+// Hook: segunda variante de _addAuxImagesIfNeeded com scaleFactor:
+// Presente em dispositivos A14+ (iPhone 12+)
+// -----------------------------------------------------------------------
+typedef void (*AddAuxImagesScaleFunc)(id, SEL, int, CMSampleBufferRef, id, id, float, id, BOOL);
+static AddAuxImagesScaleFunc orig_addAuxImagesScale;
+static void hook_addAuxImagesScale(id self, SEL _cmd, int scheme,
+                                    CMSampleBufferRef sampleBuf, id meta,
+                                    id settings, float scaleFactor,
+                                    id flags, BOOL embedThumb) {
+    CMSampleBufferRef replacement = NULL;
+    if (gCoordinator) {
+        replacement = [gCoordinator injectReplacementForFrame:sampleBuf];
+        if (replacement != sampleBuf) sampleBuf = replacement;
+        else replacement = NULL;
+    }
+    orig_addAuxImagesScale(self, _cmd, scheme, sampleBuf, meta,
+                           settings, scaleFactor, flags, embedThumb);
+    if (replacement) CFRelease(replacement);
 }
 
 // -----------------------------------------------------------------------
 // Setup para apps UIKit (WebKit, câmera, etc.)
+// Instala hook no delegate de AVCaptureVideoDataOutput via runtime swizzling
 // -----------------------------------------------------------------------
 static void AVSFrameCoordinator_setup_uikit_app(void) {
-    // Hook AVCaptureVideoDataOutputSampleBufferDelegate
-    // para injetar frames em apps que usam câmera via AVFoundation
+    // Inicializa coordinator para apps de terceiros
+    gCoordinator = [[AVSFrameCoordinator alloc] init];
+
+    // Hook AVCaptureVideoDataOutput para interceptar setSampleBufferDelegate:queue:
+    // Quando um app registra seu delegate, hookamos o método do delegate dinamicamente
     Class avCapOutput = NSClassFromString(@"AVCaptureVideoDataOutput");
     if (!avCapOutput) return;
 
-    // Note: o delegate é um objeto externo; hook via Method Swizzling
-    // nas classes concretas que implementam o delegate
+    // Hook no delegate callback de entrega de frame
+    // Usa objc runtime para detectar classes que implementam o protocolo
+    unsigned int classCount = 0;
+    Class *classes = objc_copyClassList(&classCount);
+    Protocol *delegateProto = @protocol(AVCaptureVideoDataOutputSampleBufferDelegate);
+
+    for (unsigned int i = 0; i < classCount; i++) {
+        if (class_conformsToProtocol(classes[i], delegateProto)) {
+            SEL sel = @selector(captureOutput:didOutputSampleBuffer:fromConnection:);
+            Method m = class_getInstanceMethod(classes[i], sel);
+            if (m) {
+                SampleBufferDelegateFunc origImpl = (SampleBufferDelegateFunc)method_getImplementation(m);
+                // Apenas instala hook se ainda não hookado
+                if (origImpl != (IMP)hook_captureOutput_didOutputSampleBuffer) {
+                    orig_captureOutput_didOutputSampleBuffer = origImpl;
+                    method_setImplementation(m, (IMP)hook_captureOutput_didOutputSampleBuffer);
+                    NSLog(@"[avsd-KYC] Hooked delegate: %s", class_getName(classes[i]));
+                }
+            }
+        }
+    }
+    free(classes);
+
+    NSLog(@"[avsd-KYC] UIKit app setup complete");
 }

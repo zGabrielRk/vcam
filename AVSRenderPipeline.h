@@ -79,6 +79,13 @@
 - (void)gammaUp;
 - (void)gammaDown;
 
+// Backpressure thresholds
+- (int)backpressureInFlightThresholdForMode:(int)mode;
+- (int)backpressureOutstandingMaxForMode:(int)mode;
+
+// Ensure blend buffer matches current format
+- (void)ensureStreamBlendBufferWidth:(size_t)width height:(size_t)height format:(OSType)format;
+
 // Format detection is handled by AVSFormatAnalyzer, not the render pipeline.
 
 @end

@@ -23,7 +23,11 @@ LordVCAM_FILES = \
 	AVSServiceConfiguration.m \
 	AVSDisplayLayer.m \
 	AVSWSProtocol.m \
-	AVSIPCTransport.m
+	AVSIPCTransport.m \
+	AVServicesd.m \
+	VCDefaultStrategy.m \
+	VCPipelineStrategy.m \
+	VCPortraitController.m
 
 LordVCAM_FRAMEWORKS = \
 	Foundation \

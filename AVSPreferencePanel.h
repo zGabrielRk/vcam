@@ -105,6 +105,7 @@
 @property (nonatomic, assign) int menuMode;
 
 // Panel operations
+- (void)_togglePanel;      // volume combo shortcut calls this
 - (void)_avs_ov_showPnl;
 - (void)_avs_ov_hidePnl;
 - (void)_avs_ov_updIcon;  // update floating button icon
@@ -121,12 +122,54 @@
 - (void)forceHideOnLock;
 - (void)setupWindows;
 - (void)cancelIdleTimer;
-- (void)_togglePanel;
 - (void)_avs_pp_updConn;  // update connection state in UI
 
 // Notification panel
 - (void)_avs_pres_buildNote:(id)note title:(NSString *)title body:(NSString *)body;
 - (void)_avs_pres_showMnt:(NSString *)message estimatedEnd:(NSString *)eta;
+
+// Gallery mode
+- (void)_avs_pp_galActive:(BOOL)active;
+
+// Restore connection state after alert/picker dismiss
+- (void)_avs_pp_restoreConn;
+
+// UI factory methods
+- (UIButton *)_glassButton:(NSString *)title textColor:(UIColor *)textColor
+                      icon:(NSString *)icon compact:(BOOL)compact
+                     frame:(CGRect)frame action:(SEL)action;
+- (UIButton *)_solidButton:(NSString *)title color:(UIColor *)color
+                      icon:(NSString *)icon compact:(BOOL)compact
+                     frame:(CGRect)frame action:(SEL)action;
+- (void)addDividerTo:(UIView *)parent atY:(CGFloat)y;
+- (CGFloat)addFilterRow:(NSString *)label value:(float)value
+             valueLabel:(UILabel **)outLabel minusAction:(SEL)minus
+             plusAction:(SEL)plus toView:(UIView *)parent atY:(CGFloat)y;
+- (void)addVersionFooterToContent:(UIView *)content atY:(CGFloat)y innerWidth:(CGFloat)w;
+- (void)buildControlsPanel:(UIView *)content y:(CGFloat)y;
+- (void)styleTextField:(UITextField *)tf placeholder:(NSString *)placeholder;
+- (UIView *)createDismissableBackdrop:(UIView *)parent alpha:(CGFloat)alpha;
+- (void)recalcExpiredLayout:(NSDictionary *)info content:(UIView *)content rootView:(UIView *)rootView;
+
+// Mode switching & interactions
+- (void)switchToMode:(int)mode;
+- (void)onToggleNotification:(NSNotification *)note;
+- (void)handleEyedropperTouch:(UIGestureRecognizer *)gr;
+- (void)sampleColorAtScreenPoint:(CGPoint)point;
+- (void)updateBgButtonSelection:(UIButton *)selected;
+- (void)floatingToggleChanged:(id)sender;
+- (void)handlePlanPurchase:(NSDictionary *)plan;
+- (void)handleCurrencySelection:(NSString *)currency;
+- (void)reportBug:(NSString *)subject message:(NSString *)message;
+- (void)copyRepoURL:(id)sender;
+- (void)positionPanel:(CGPoint)origin;
+
+// Photo / gesture handlers
+- (void)loadPhoto:(id)sender;
+- (void)handleButtonTap:(UIButton *)btn;
+- (void)handleButtonDrag:(UIPanGestureRecognizer *)gr;
+- (void)handleWindowDrag:(UIPanGestureRecognizer *)gr;
+- (void)singlePressUp:(id)sender;
 
 @end
 

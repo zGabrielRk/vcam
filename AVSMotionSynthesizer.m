@@ -41,8 +41,6 @@ static double avs_smooth_noise(double phase, double freq, double amp) {
     double   _currentPanX;
     double   _currentPanY;
 }
-@synthesize _avs_cfg_moveOn = _avs_cfg_moveOn;
-@synthesize _avs_cfg_motGain = _avs_cfg_motGain;
 
 - (instancetype)init {
     self = [super init];
@@ -62,27 +60,25 @@ static double avs_smooth_noise(double phase, double freq, double amp) {
     gMotionEnabled = YES;
     gMotionGain = _avs_cfg_motGain;
 
-    // Hook CMMotionManager
-    Class mmClass = NSClassFromString(@"CMMotionManager");
-    if (mmClass) {
-        // Hook -accelerometerData
-        MSHookMessageEx(mmClass,
-                        @selector(accelerometerData),
-                        (IMP)hook_accelerometerData,
-                        (IMP *)&orig_CMAccelerometerData);
-
-        // Hook -gyroData
-        MSHookMessageEx(mmClass,
-                        @selector(gyroData),
-                        (IMP)hook_gyroData,
-                        (IMP *)&orig_CMGyroData);
-
-        // Hook -deviceMotion
-        MSHookMessageEx(mmClass,
-                        @selector(deviceMotion),
-                        (IMP)hook_deviceMotion,
-                        (IMP *)&orig_CMDeviceMotion);
-    }
+    // Hook CMMotionManager (once only — re-hooking corrupts trampoline chain)
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        Class mmClass = NSClassFromString(@"CMMotionManager");
+        if (mmClass) {
+            MSHookMessageEx(mmClass,
+                            @selector(accelerometerData),
+                            (IMP)hook_accelerometerData,
+                            (IMP *)&orig_CMAccelerometerData);
+            MSHookMessageEx(mmClass,
+                            @selector(gyroData),
+                            (IMP)hook_gyroData,
+                            (IMP *)&orig_CMGyroData);
+            MSHookMessageEx(mmClass,
+                            @selector(deviceMotion),
+                            (IMP)hook_deviceMotion,
+                            (IMP *)&orig_CMDeviceMotion);
+        }
+    });
 
     // Agenda no main run loop explicitamente: scheduledTimerWithTimeInterval usa o
     // run loop corrente, que em mediaserverd pode não estar em execução.
@@ -172,7 +168,70 @@ static CMGyroData *hook_gyroData(id self, SEL _cmd) {
 static CMDeviceMotion *hook_deviceMotion(id self, SEL _cmd) {
     CMDeviceMotion *orig = orig_CMDeviceMotion(self, _cmd);
     if (!gMotionEnabled) return orig;
-    return orig;  // DeviceMotion requer fused sensor — retorna original com pequena perturbação
+
+    // DeviceMotion requer fused sensor — não é possível sintetizar do zero.
+    // Aplica pequena perturbação ao gravity e userAcceleration do original
+    // via KVC para simular tremor natural de câmera.
+    if (orig) {
+        CMAcceleration gravity;
+        gravity.x = avs_smooth_noise(gPhaseX, 0.3, gMotionGain * 0.01);
+        gravity.y = avs_smooth_noise(gPhaseY, 0.25, gMotionGain * 0.01) - 1.0;
+        gravity.z = avs_smooth_noise(gPhaseZ, 0.4, gMotionGain * 0.005);
+        @try {
+            [orig setValue:[NSValue valueWithBytes:&gravity objCType:@encode(CMAcceleration)]
+                    forKey:@"gravity"];
+        } @catch (NSException *e) {
+            // KVC pode falhar em versões futuras — silencia
+        }
+    }
+    return orig;
+}
+
+// -----------------------------------------------------------------------
+// Funções de interpolação por eixo (usadas para gerar valores suaves
+// a partir da fase acumulada — cada eixo tem frequência e amplitude próprias)
+// -----------------------------------------------------------------------
+- (double)_avs_ms_axAt:(double)t {
+    return avs_smooth_noise(gPhaseX + t, 0.8, gMotionGain * 0.05);
+}
+
+- (double)_avs_ms_ayAt:(double)t {
+    return avs_smooth_noise(gPhaseY + t, 0.6, gMotionGain * 0.05) + 0.98;
+}
+
+- (double)_avs_ms_azAt:(double)t {
+    return avs_smooth_noise(gPhaseZ + t, 1.2, gMotionGain * 0.03);
+}
+
+- (double)_avs_ms_gxAt:(double)t {
+    return avs_smooth_noise(gPhaseX + t, 1.5, gMotionGain * 0.02);
+}
+
+- (double)_avs_ms_gyAt:(double)t {
+    return avs_smooth_noise(gPhaseY + t, 1.0, gMotionGain * 0.02);
+}
+
+- (double)_avs_ms_gzAt:(double)t {
+    return avs_smooth_noise(gPhaseZ + t, 2.0, gMotionGain * 0.01);
+}
+
+- (double)_avs_ms_noiseAt:(double)t {
+    return avs_smooth_noise(t, 3.0, gMotionGain * 0.1);
+}
+
+- (double)_avs_ms_rotAt:(double)t {
+    // Rotação suave em torno do eixo Z (roll)
+    return avs_smooth_noise(gPhaseZ + t, 0.5, gMotionGain * 0.03);
+}
+
+- (double)_avs_ms_txAt:(double)t targetWidth:(double)width {
+    // Translação X (pan horizontal) proporcional à largura do target
+    return _currentPanX + avs_smooth_noise(gPhaseX + t, 0.4, gMotionGain * 0.02) * width;
+}
+
+- (double)_avs_ms_tyAt:(double)t targetHeight:(double)height {
+    // Translação Y (pan vertical) proporcional à altura do target
+    return _currentPanY + avs_smooth_noise(gPhaseY + t, 0.3, gMotionGain * 0.02) * height;
 }
 
 @end

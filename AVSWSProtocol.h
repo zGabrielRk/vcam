@@ -46,4 +46,13 @@ static inline BOOL AVSLockStateQuery(int notifyToken) {
 }
 #endif
 
+// -----------------------------------------------------------------------
+// SPKI header extraction for certificate pinning.
+// Prepends the standard ASN.1 header to a raw RSA/EC public key so that
+// SHA256(header + publicKey) produces the canonical SPKI pin hash.
+// -----------------------------------------------------------------------
+NSData *VCSPKIHeaderForPublicKey(SecKeyRef publicKey);
+
+#endif
+
 #endif /* AVSWSProtocol_h */

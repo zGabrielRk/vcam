@@ -139,7 +139,7 @@
 // Wallet: saldo + recarga
 // -----------------------------------------------------------------------
 - (void)presentWallet:(UIViewController *)parent {
-    NSString *currency = _config._avs_cfg_srvAddr ?: @"BRL";
+    NSString *currency = @"BRL";
     double balance = _config._avs_cfg_balance;
 
     UIAlertController *alert = [UIAlertController
@@ -524,11 +524,453 @@
 }
 
 - (void)_avs_pres_showMnt:(NSString *)message estimatedEnd:(NSString *)eta {
-    // Exibe alerta de manutenção programada
-    // "Scheduled Downtime"
-    // "ESTIMATED END: %@ (GMT-3)"
-    // "Active subscriptions receive time credit for the downtime period."
     NSLog(@"[avsd] Maintenance: %@ ETA: %@", message, eta);
+}
+
+// -----------------------------------------------------------------------
+// Métodos de construção e exibição de alertas/banners
+// Reconstruídos a partir dos seletores e cstrings do binário original
+// -----------------------------------------------------------------------
+
+// ---- Ban (suspensão temporária) ----
+- (void)_avs_pres_buildBan:(NSString *)reason
+                  duration:(NSTimeInterval)duration
+          _avs_cfg_banType:(BOOL)banType {
+    _config._avs_cfg_banText = reason;
+    _config._avs_cfg_banType = banType;
+    _config._avs_cfg_banExp  = [NSString stringWithFormat:@"%.0f", duration];
+    NSLog(@"[avsd] Ban built: %@ duration=%.0fs type=%d", reason, duration, banType);
+}
+
+- (void)_avs_pres_showBan:(NSString *)reason
+                 duration:(NSTimeInterval)duration
+         _avs_cfg_banType:(BOOL)banType {
+    [self _avs_pres_buildBan:reason duration:duration _avs_cfg_banType:banType];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIAlertController *alert = [UIAlertController
+            alertControllerWithTitle:@"Account Suspended"
+            message:[NSString stringWithFormat:@"%@\n\nExpires in: %.0f minutes", reason, duration / 60.0]
+            preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+            style:UIAlertActionStyleDefault handler:nil]];
+        [self _presentAlertOnTop:alert];
+    });
+}
+
+- (void)_avs_pres_clearBan {
+    _config._avs_cfg_banText = nil;
+    _config._avs_cfg_banType = NO;
+    _config._avs_cfg_banExp  = nil;
+    NSLog(@"[avsd] Ban cleared");
+}
+
+- (BOOL)_avs_pres_isBanned {
+    return _config._avs_cfg_banText.length > 0;
+}
+
+- (void)_avs_pres_banInfo {
+    if (![self _avs_pres_isBanned]) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIAlertController *alert = [UIAlertController
+            alertControllerWithTitle:@"Ban Info"
+            message:[NSString stringWithFormat:@"Reason: %@\nExpires: %@",
+                     _config._avs_cfg_banText ?: @"Unknown",
+                     _config._avs_cfg_banExp  ?: @"Unknown"]
+            preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+            style:UIAlertActionStyleDefault handler:nil]];
+        [self _presentAlertOnTop:alert];
+    });
+}
+
+// ---- Erros / Download / Server Error ----
+- (void)_avs_pres_buildErrLoc:(NSString *)location message:(NSString *)message {
+    NSLog(@"[avsd] Error at %@: %@", location, message);
+    _config._avs_cfg_lastErr = [NSString stringWithFormat:@"%@: %@", location, message];
+}
+
+- (void)_avs_pres_showErrLoc:(NSString *)location message:(NSString *)message {
+    [self _avs_pres_buildErrLoc:location message:message];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIAlertController *alert = [UIAlertController
+            alertControllerWithTitle:location
+            message:message
+            preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+            style:UIAlertActionStyleDefault handler:nil]];
+        [self _presentAlertOnTop:alert];
+    });
+}
+
+- (void)_avs_pres_buildDL:(NSString *)version {
+    NSLog(@"[avsd] Update available: %@", version);
+    _config._avs_cfg_latest = version;
+}
+
+- (void)_avs_pres_showDL:(NSString *)version {
+    [self _avs_pres_buildDL:version];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIAlertController *alert = [UIAlertController
+            alertControllerWithTitle:@"Update Available"
+            message:[NSString stringWithFormat:@"Version %@ is available.\nCurrent: %@",
+                     version, _config._avs_cfg_ver ?: @"?"]
+            preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"Later"
+            style:UIAlertActionStyleCancel handler:nil]];
+        [alert addAction:[UIAlertAction actionWithTitle:@"Update"
+            style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+                // Abre URL de download (cydia:// ou repo)
+            }]];
+        [self _presentAlertOnTop:alert];
+    });
+}
+
+- (void)_avs_pres_buildSE {
+    NSLog(@"[avsd] Server error");
+    _config._avs_cfg_lastErr = @"Server Error";
+}
+
+- (void)_avs_pres_showSE {
+    [self _avs_pres_buildSE];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIAlertController *alert = [UIAlertController
+            alertControllerWithTitle:@"Server Error"
+            message:@"Unable to reach the server. Please try again later."
+            preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+            style:UIAlertActionStyleDefault handler:nil]];
+        [self _presentAlertOnTop:alert];
+    });
+}
+
+// ---- Expiração ----
+- (void)_avs_pres_buildExp {
+    NSLog(@"[avsd] Subscription expired");
+}
+
+- (void)_avs_pres_showExp {
+    [self _avs_pres_buildExp];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIAlertController *alert = [UIAlertController
+            alertControllerWithTitle:@"Subscription Expired"
+            message:@"Your plan has expired. Recharge to continue using the service."
+            preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"Recharge"
+            style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+                [self presentRechargeScreen:nil];
+            }]];
+        [alert addAction:[UIAlertAction actionWithTitle:@"Later"
+            style:UIAlertActionStyleCancel handler:nil]];
+        [self _presentAlertOnTop:alert];
+    });
+}
+
+// ---- Manutenção (build/show pair) ----
+- (void)_avs_pres_buildMnt:(NSString *)message estimatedEnd:(NSString *)eta {
+    _config._avs_cfg_maintMsg = message;
+    _config._avs_cfg_maintETA = eta;
+    NSLog(@"[avsd] Maintenance built: %@ ETA=%@", message, eta);
+}
+
+// _avs_pres_showMnt:estimatedEnd: já implementado acima
+
+// ---- Mensagem genérica / Update / Conexão ----
+- (void)_avs_pres_buildMsg:(NSString *)title body:(NSString *)body style:(int)style {
+    NSLog(@"[avsd] Message: %@ — %@", title, body);
+}
+
+- (void)_avs_pres_buildUpd:(NSString *)info {
+    NSLog(@"[avsd] Update info: %@", info);
+    _config._avs_cfg_latest = info;
+}
+
+- (void)_avs_pres_connAlert {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIAlertController *alert = [UIAlertController
+            alertControllerWithTitle:@"Connection Lost"
+            message:@"The connection to the server was lost. Reconnecting..."
+            preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+            style:UIAlertActionStyleDefault handler:nil]];
+        [self _presentAlertOnTop:alert];
+    });
+}
+
+// ---- Pagamento ----
+- (void)_avs_pres_cnclPay {
+    NSLog(@"[avsd] Payment cancelled");
+    [self _stopPixPolling];
+}
+
+- (void)_avs_pres_execPlan:(NSDictionary *)plan
+                    planId:(NSString *)planId
+                     price:(double)price
+                  planName:(NSString *)planName {
+    NSLog(@"[avsd] Executing plan: %@ (%.2f)", planName, price);
+    [self _activatePlan:plan];
+}
+
+- (double)_avs_pres_parseAmt:(NSString *)amountStr {
+    // Remove símbolos de moeda e parseia valor numérico
+    NSString *cleaned = [[amountStr stringByReplacingOccurrencesOfString:@"R$" withString:@""]
+                          stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+    cleaned = [cleaned stringByReplacingOccurrencesOfString:@"," withString:@"."];
+    return [cleaned doubleValue];
+}
+
+// ---- UI updates ----
+- (void)_avs_pres_updEye:(id)value image:(UIImage *)image tint:(UIColor *)tint {
+    // Atualiza ícone do eyedropper com cor selecionada
+    NSLog(@"[avsd] Eye update: tint=%@", tint);
+}
+
+- (void)_avs_pres_updRem {
+    // Atualiza label de tempo restante da assinatura
+    double expiry = _config._avs_cfg_expiry.doubleValue;
+    double now = [[NSDate date] timeIntervalSince1970];
+    double remaining = expiry - now;
+    if (remaining <= 0) {
+        _config._avs_cfg_remaining = @"Expired";
+    } else {
+        int hours = (int)(remaining / 3600);
+        int mins  = (int)(fmod(remaining, 3600) / 60);
+        _config._avs_cfg_remaining = [NSString stringWithFormat:@"%dh %dm", hours, mins];
+    }
+}
+
+- (void)_avs_pres_updateLabel {
+    // Atualiza status label com informações da conexão
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSString *status = [NSString stringWithFormat:@"%@ | FPS:%.0f | Dec:%.1fms",
+            _config._avs_cfg_connSt ?: @"—",
+            _config._avs_cfg_curFPS,
+            _config._avs_cfg_decEMA];
+        _config._avs_cfg_statusLabel.text = status;
+    });
+}
+
+// ---- Validação de expiração ----
+- (void)_avs_pres_valExpAlert {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIAlertController *alert = [UIAlertController
+            alertControllerWithTitle:@"Expiring Soon"
+            message:@"Your subscription is about to expire. Consider renewing."
+            preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"Renew"
+            style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+                [self presentRechargeScreen:nil];
+            }]];
+        [alert addAction:[UIAlertAction actionWithTitle:@"Dismiss"
+            style:UIAlertActionStyleCancel handler:nil]];
+        [self _presentAlertOnTop:alert];
+    });
+}
+
+- (void)_avs_pres_valExpDismiss {
+    // Dismisses validation expiry alert
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (_config._avs_cfg_dismissCb) {
+            _config._avs_cfg_dismissCb();
+        }
+    });
+}
+
+// ---- Navegação ----
+- (void)_avs_pres_backAuth {
+    // Volta para tela de autenticação (login)
+    NSLog(@"[avsd] Back to auth");
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (_config._avs_cfg_dismissCb) {
+            _config._avs_cfg_dismissCb();
+        }
+    });
+}
+
+- (void)_avs_pres_bkMenu {
+    // Volta ao menu principal
+    NSLog(@"[avsd] Back to menu");
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (_config._avs_cfg_hideCb) {
+            _config._avs_cfg_hideCb();
+        }
+    });
+}
+
+// -----------------------------------------------------------------------
+// Telas de exibição completas (show* — UI flow completo)
+// -----------------------------------------------------------------------
+- (void)showError:(NSString *)message {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIAlertController *alert = [UIAlertController
+            alertControllerWithTitle:@"Error"
+            message:message
+            preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+            style:UIAlertActionStyleDefault handler:nil]];
+        [self _presentAlertOnTop:alert];
+    });
+}
+
+- (void)showMessageWithTitle:(NSString *)title body:(NSString *)body style:(int)style {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIAlertControllerStyle alertStyle = (style == 1)
+            ? UIAlertControllerStyleActionSheet
+            : UIAlertControllerStyleAlert;
+        UIAlertController *alert = [UIAlertController
+            alertControllerWithTitle:title
+            message:body
+            preferredStyle:alertStyle];
+        [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+            style:UIAlertActionStyleDefault handler:nil]];
+        [self _presentAlertOnTop:alert];
+    });
+}
+
+- (void)showWindow:(id)config {
+    // Apresenta janela customizada sobre a UI
+    NSLog(@"[avsd] showWindow: %@", config);
+}
+
+- (void)showPIXWindowWithCode:(NSString *)pixCode amount:(double)amount {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        // Gera QR Code
+        CIFilter *qrFilter = [CIFilter filterWithName:@"CIQRCodeGenerator"];
+        [qrFilter setValue:[pixCode dataUsingEncoding:NSUTF8StringEncoding] forKey:@"inputMessage"];
+        [qrFilter setValue:@"H" forKey:@"inputCorrectionLevel"];
+
+        UIAlertController *alert = [UIAlertController
+            alertControllerWithTitle:@"PIX Copy and Paste:"
+            message:[NSString stringWithFormat:@"R$ %.2f\n\n%@", amount, pixCode]
+            preferredStyle:UIAlertControllerStyleAlert];
+
+        [alert addAction:[UIAlertAction actionWithTitle:@" Copy PIX Code"
+            style:UIAlertActionStyleDefault
+            handler:^(UIAlertAction *a) {
+                [UIPasteboard generalPasteboard].string = pixCode;
+            }]];
+        [alert addAction:[UIAlertAction actionWithTitle:@"Close"
+            style:UIAlertActionStyleCancel handler:nil]];
+        [self _presentAlertOnTop:alert];
+    });
+}
+
+- (void)showCryptoWindowWithAddress:(NSString *)address
+                       cryptoAmount:(double)cryptoAmount
+                     cryptoCurrency:(NSString *)cryptoCurrency
+                         fiatAmount:(double)fiatAmount {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIAlertController *alert = [UIAlertController
+            alertControllerWithTitle:[NSString stringWithFormat:@"Send %@ %.6f", cryptoCurrency, cryptoAmount]
+            message:[NSString stringWithFormat:@"≈ $ %.2f\n\n%@", fiatAmount, address]
+            preferredStyle:UIAlertControllerStyleAlert];
+
+        [alert addAction:[UIAlertAction actionWithTitle:@" Copy Address"
+            style:UIAlertActionStyleDefault
+            handler:^(UIAlertAction *a) {
+                [UIPasteboard generalPasteboard].string = address;
+            }]];
+        [alert addAction:[UIAlertAction actionWithTitle:@"Confirm"
+            style:UIAlertActionStyleDefault handler:nil]];
+        [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
+            style:UIAlertActionStyleCancel handler:nil]];
+        [self _presentAlertOnTop:alert];
+    });
+}
+
+// -----------------------------------------------------------------------
+// Clipboard helpers — called as button targets from payment screens
+// -----------------------------------------------------------------------
+- (void)walletCopyPIX:(id)sender {
+    if (_currentPixPaymentId) {
+        // O código PIX está no _config ou no último alerta; copia o que estiver disponível
+        NSString *code = _config._avs_cfg_wPayId ?: _currentPixPaymentId;
+        [UIPasteboard generalPasteboard].string = code;
+        NSLog(@"[avsd] PIX code copied: %@", code);
+    }
+}
+
+- (void)walletCopyCryptoAddress:(id)sender {
+    if (_currentCryptoAddr) {
+        [UIPasteboard generalPasteboard].string = _currentCryptoAddr;
+        NSLog(@"[avsd] Crypto address copied: %@", _currentCryptoAddr);
+    }
+}
+
+- (void)showCoinSelectionForAmount:(double)amount {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIAlertController *alert = [UIAlertController
+            alertControllerWithTitle:@"Select Coin"
+            message:[NSString stringWithFormat:@"Amount: $ %.2f", amount]
+            preferredStyle:UIAlertControllerStyleActionSheet];
+
+        NSArray *coins = @[
+            @[@"USDT BEP20 (BSC)",  @"usdt_bep20"],
+            @[@"USDT Polygon",      @"usdt_polygon"],
+            @[@"USDT Base",         @"usdt_base"],
+            @[@"USDT Solana (SOL)", @"usdt_sol"],
+            @[@"USDC Solana",       @"usdc_sol"],
+            @[@"Litecoin",          @"ltc"],
+        ];
+        for (NSArray *coin in coins) {
+            [alert addAction:[UIAlertAction
+                actionWithTitle:coin[0]
+                style:UIAlertActionStyleDefault
+                handler:^(UIAlertAction *a) {
+                    [self _createCryptoPayment:amount network:coin[1] parent:nil];
+                }]];
+        }
+        [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
+            style:UIAlertActionStyleCancel handler:nil]];
+        [self _presentAlertOnTop:alert];
+    });
+}
+
+- (void)showUpdateRequiredWithLatestVersion:(NSString *)version {
+    [self _avs_pres_buildUpd:version];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIAlertController *alert = [UIAlertController
+            alertControllerWithTitle:@"Update Required"
+            message:[NSString stringWithFormat:
+                @"A new version (%@) is required to continue.\nCurrent: %@",
+                version, _config._avs_cfg_ver ?: @"?"]
+            preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"Update Now"
+            style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+                // Abre URL de update
+            }]];
+        [self _presentAlertOnTop:alert];
+    });
+}
+
+- (void)showReleaseNoteWithVersion:(NSString *)version
+                             title:(NSString *)title
+                              body:(NSString *)body {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIAlertController *alert = [UIAlertController
+            alertControllerWithTitle:[NSString stringWithFormat:@"What's New in %@", version]
+            message:[NSString stringWithFormat:@"%@\n\n%@", title, body]
+            preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+            style:UIAlertActionStyleDefault handler:nil]];
+        [self _presentAlertOnTop:alert];
+    });
+}
+
+// -----------------------------------------------------------------------
+// Helper: apresenta UIAlertController no topo da hierarquia de janelas
+// -----------------------------------------------------------------------
+- (void)_presentAlertOnTop:(UIAlertController *)alert {
+    UIWindow *keyWindow = nil;
+    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+        if ([scene isKindOfClass:[UIWindowScene class]]) {
+            for (UIWindow *w in ((UIWindowScene *)scene).windows) {
+                if (w.isKeyWindow) { keyWindow = w; break; }
+            }
+        }
+    }
+    UIViewController *top = keyWindow.rootViewController;
+    while (top.presentedViewController) top = top.presentedViewController;
+    if (top) [top presentViewController:alert animated:YES completion:nil];
 }
 
 @end

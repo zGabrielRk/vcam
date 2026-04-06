@@ -12,7 +12,7 @@
 - (NSString *)_avs_fa_info;  // returns format string e.g. "420v 1920x1080 30fps"
 
 // FPS tracking
-@property (nonatomic, assign) double fpsAccumulator;
-@property (nonatomic, assign) double lastMetricsLog;
+@property (nonatomic, assign) double _fpsAccumulator;
+@property (nonatomic, assign) double _lastMetricsLog;
 
 @end

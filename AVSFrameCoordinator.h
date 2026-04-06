@@ -6,12 +6,14 @@
 #import <CoreMedia/CoreMedia.h>
 #import <AVFoundation/AVFoundation.h>
 #import "AVSRenderPipeline.h"
+#import "AVSTransportDelegate.h"
 
 @protocol AVSDataProvider;
+@class AVSStreamTransport;
 
 // Injected via CydiaSubstrate into mediaserverd / SpringBoard
 // Hooks: AVCaptureConnection, FigCaptureClientSessionMonitor, BWNodeOutput
-@interface AVSFrameCoordinator : NSObject
+@interface AVSFrameCoordinator : NSObject <AVSTransportDelegate>
 
 // Render pipeline (exposed for UI delegation)
 @property (nonatomic, readonly) AVSRenderPipeline *renderPipeline;
@@ -42,6 +44,18 @@
 @property (nonatomic, assign) BOOL _avs_cfg_edCamMode; // edit cam mode
 @property (nonatomic, assign) BOOL _avs_cfg_stallRec;  // stall recovery
 @property (nonatomic, assign) BOOL _avs_cfg_prevEn;    // preview enabled
+
+// Stats (averages/derived)
+@property (nonatomic, assign) double _avs_cfg_avgProcMs; // avg processing time (ms)
+@property (nonatomic, assign) int    _avs_cfg_frmGen;    // frames generated
+
+// Notification tokens (Darwin)
+@property (nonatomic, assign) int    _avs_cfg_edColorNT; // edit color notification token
+@property (nonatomic, assign) int    _avs_cfg_lockNT;    // lock state notification token
+
+// Reference URLs
+@property (nonatomic, copy) NSString *_avs_cfg_helpRef;  // help URL
+@property (nonatomic, copy) NSString *_avs_cfg_webRef;   // web reference URL
 
 // Per-frame injection log counters
 @property (nonatomic, assign) int _avs_cfg_frmDec;   // frames decoded
@@ -175,6 +189,7 @@
 - (void)_avs_cfg_writeSession;
 - (void)_avs_cfg_nextEvent;
 - (NSString *)_avs_cfg_spkiHash:(NSData *)certData;
+- (id)_avs_cfg_st;
 - (void)set_avs_cfg_st:(id)state;
 
 // Public interface used by KYCHooks and transport classes
@@ -185,8 +200,10 @@
 - (void)setDataSource:(id<AVSDataProvider>)source;
 - (void)enableReplacement:(BOOL)enable;
 - (void)enqueueServerEvent:(NSDictionary *)event;
+- (void)connectTransport:(AVSStreamTransport *)transport;
 
-// IPC — called from KYCHooks to configure cross-process role
-- (void)configureIPCAsProducer;  // SpringBoard
-- (void)configureIPCAsConsumer;  // mediaserverd
+// IPC (cross-process frame sharing between SpringBoard and mediaserverd)
+- (void)configureIPCAsProducer;
+- (void)configureIPCAsConsumer;
+
 @end

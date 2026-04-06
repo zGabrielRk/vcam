@@ -41,6 +41,9 @@
 - (void)_avs_dl_updFrame:(CMSampleBufferRef)frame {
     if (!frame || !_isReady) return;
 
+    // Retain before dispatch: caller may release frame before block executes
+    CFRetain(frame);
+
     // AVSampleBufferDisplayLayer precisa de apresentação no main thread
     dispatch_async(dispatch_get_main_queue(), ^{
         if (self->_displayLayer.status == AVQueuedSampleBufferRenderingStatusFailed) {
@@ -55,6 +58,7 @@
         } else {
             [self->_displayLayer enqueueSampleBuffer:frame];
         }
+        CFRelease(frame);
     });
 }
 

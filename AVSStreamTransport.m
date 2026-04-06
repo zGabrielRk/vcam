@@ -5,6 +5,7 @@
 #import "AVSStreamTransport.h"
 #import "AVSFrameCoordinator.h"
 #import "AVSWSProtocol.h"
+#import "VCDefaultStrategy.h"
 #import <CommonCrypto/CommonCrypto.h>
 #include <libkern/OSByteOrder.h>
 
@@ -12,6 +13,7 @@
     NSTimeInterval _lastPingTime;
     int            _reconnectCount;
     BOOL           _intentionalDisconnect;
+    NSData        *_latestReceivedFrame;
 }
 
 - (instancetype)init {
@@ -23,6 +25,7 @@
         _isRunning = NO;
         _lockStateRegistered = NO;
         _reconnectCount = 0;
+        _connectionStrategy = [[VCDefaultStrategy alloc] init];
     }
     return self;
 }
@@ -77,17 +80,32 @@
 
 - (void)setIsConnected:(BOOL)connected {
     _isClientConnected = connected;
-    if (!connected && !_intentionalDisconnect) {
-        // Reconectar após delay
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)),
-                       _wsQueue, ^{
-            if (!self->_intentionalDisconnect && self.serverURL) {
-                NSString *host = [self.serverURL stringByReplacingOccurrencesOfString:@"wss://" withString:@""];
-                host = [host stringByReplacingOccurrencesOfString:@":8765" withString:@""];
-                [self connectToServer:host];
-            }
-        });
+    if (connected) {
+        _reconnectCount = 0;
+        [self.connectionStrategy resetCounters];
+        return;
     }
+    if (_intentionalDisconnect) return;
+
+    // Usa VCDefaultStrategy para backoff exponencial
+    VCDefaultStrategy *strategy = self.connectionStrategy;
+    if (!strategy || ![strategy shouldReconnectAfterError:nil attempt:_reconnectCount]) {
+        NSLog(@"[avsd] Reconnect aborted (attempt %d)", _reconnectCount);
+        return;
+    }
+    NSTimeInterval delay = [strategy reconnectDelayForAttempt:_reconnectCount];
+    [strategy scheduleReconnectForTransport:self];
+    _reconnectCount++;
+
+    NSLog(@"[avsd] Reconnecting in %.1fs (attempt %d)", delay, _reconnectCount);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)),
+                   _wsQueue, ^{
+        if (!self->_intentionalDisconnect && self.serverURL) {
+            NSString *host = [self.serverURL stringByReplacingOccurrencesOfString:@"wss://" withString:@""];
+            host = [host stringByReplacingOccurrencesOfString:@":8765" withString:@""];
+            [self connectToServer:host];
+        }
+    });
 }
 
 // -----------------------------------------------------------------------
@@ -150,6 +168,10 @@
     // uint32_t height = OSReadLittleInt32(bytes, 16);
 
     NSData *nalData = [data subdataWithRange:NSMakeRange(20, data.length - 20)];
+
+    // Store latest frame for popLatest (already on _wsQueue via receive loop)
+    _latestReceivedFrame = nalData;
+
     [self sendFrame:@(seqnum) data:nalData];
     (void)flags;
 }
@@ -265,7 +287,7 @@
             completion:(void(^)(NSDictionary *, NSError *))completion {
     NSError *err = nil;
     NSData *bodyData = [NSJSONSerialization dataWithJSONObject:body options:0 error:&err];
-    if (err) { completion(nil, err); return; }
+    if (err) { if (completion) completion(nil, err); return; }
 
     NSURL *url = [NSURL URLWithString:endpoint];
     NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
@@ -276,9 +298,9 @@
 
     NSURLSessionDataTask *task = [self.session dataTaskWithRequest:req
         completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-            if (error) { completion(nil, error); return; }
+            if (error) { if (completion) completion(nil, error); return; }
             NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-            completion(json, nil);
+            if (completion) completion(json, nil);
         }];
     [task resume];
 }
@@ -352,6 +374,21 @@ didReceiveChallenge:(NSURLAuthenticationChallenge *)challenge
     if (self.delegate && [self.delegate respondsToSelector:@selector(_avs_tr_onLink:)]) {
         [self.delegate _avs_tr_onLink:nil];
     }
+}
+
+// -----------------------------------------------------------------------
+// Pop latest: retorna e remove o frame mais recente do buffer de recebimento
+// Usado pelo coordinator para obter o último frame completo recebido
+// -----------------------------------------------------------------------
+- (NSData *)_avs_str_popLatest {
+    __block NSData *latest = nil;
+    dispatch_sync(_wsQueue, ^{
+        if (self->_latestReceivedFrame) {
+            latest = self->_latestReceivedFrame;
+            self->_latestReceivedFrame = nil;
+        }
+    });
+    return latest;
 }
 
 @end

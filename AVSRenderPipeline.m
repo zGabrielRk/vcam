@@ -52,6 +52,15 @@
     // CIFilter instances cached para evitar alloc por frame
     CIFilter *_colorFilter;
     CIFilter *_gammaFilter;
+    CIFilter *_blendFilter;
+
+    // Cached per-format objects (rebuilt only when format/resolution changes)
+    CVPixelBufferPoolRef _pixelBufferPool;
+    NSDictionary *_cachedPixBufAttrs;
+    CMVideoFormatDescriptionRef _cachedOutFmtDesc;
+    size_t _cachedWidth;
+    size_t _cachedHeight;
+    OSType _cachedFmt;
 
     // Protege leituras/escritas de ivars de transform entre UI thread e decoder thread
     os_unfair_lock _transformLock;
@@ -74,6 +83,7 @@
         _transformLock = OS_UNFAIR_LOCK_INIT;
         _colorFilter = [CIFilter filterWithName:@"CIColorControls"];
         _gammaFilter = [CIFilter filterWithName:@"CIGammaAdjust"];
+        _blendFilter = [CIFilter filterWithName:@"CIAdditionCompositing"];
         [self _setupMetal];
     }
     return self;
@@ -84,6 +94,9 @@
         CVMetalTextureCacheFlush(_textureCache, 0);
         CFRelease(_textureCache);
     }
+    if (_cachedOutFmtDesc) CFRelease(_cachedOutFmtDesc);
+    if (_pixelBufferPool) CFRelease(_pixelBufferPool);
+    if (self.lastBlendedBuffer) CFRelease(self.lastBlendedBuffer);
 }
 
 // -----------------------------------------------------------------------
@@ -223,31 +236,70 @@
         ciImage = _gammaFilter.outputImage;
     }
 
-    // 6. Frame blend (CIAdditionCompositing)
-    if (_blendEnabled && self.lastBlendedBuffer) {
-        CVPixelBufferRef lastPix = CMSampleBufferGetImageBuffer(self.lastBlendedBuffer);
-        if (lastPix) {
-            CIImage *lastCI = [CIImage imageWithCVPixelBuffer:lastPix];
-            CIFilter *blendFilter = [CIFilter filterWithName:@"CIAdditionCompositing"];
-            [blendFilter setValue:ciImage   forKey:kCIInputImageKey];
-            [blendFilter setValue:lastCI    forKey:kCIInputBackgroundImageKey];
-            ciImage = blendFilter.outputImage;
+    // 6. Frame blend (CIAdditionCompositing) — uses cached _blendFilter
+    // Snapshot lastBlendedBuffer sob lock para evitar race com _avs_fp_wrapBuf:
+    if (_blendEnabled) {
+        CMSampleBufferRef blendBuf = NULL;
+        os_unfair_lock_lock(&_transformLock);
+        blendBuf = self.lastBlendedBuffer;
+        if (blendBuf) CFRetain(blendBuf);
+        os_unfair_lock_unlock(&_transformLock);
+
+        if (blendBuf) {
+            CVPixelBufferRef lastPix = CMSampleBufferGetImageBuffer(blendBuf);
+            if (lastPix) {
+                CIImage *lastCI = [CIImage imageWithCVPixelBuffer:lastPix];
+                [_blendFilter setValue:ciImage   forKey:kCIInputImageKey];
+                [_blendFilter setValue:lastCI    forKey:kCIInputBackgroundImageKey];
+                ciImage = _blendFilter.outputImage;
+            }
+            CFRelease(blendBuf);
         }
     }
 
-    // 7. Renderiza para novo CVPixelBuffer
+    // 7. Renderiza para novo CVPixelBuffer (attrs cached per-format)
     size_t width  = CVPixelBufferGetWidth(pixBuf);
     size_t height = CVPixelBufferGetHeight(pixBuf);
     OSType fmt    = CVPixelBufferGetPixelFormatType(pixBuf);
 
+    if (width != _cachedWidth || height != _cachedHeight || fmt != _cachedFmt) {
+        _cachedWidth = width;
+        _cachedHeight = height;
+        _cachedFmt = fmt;
+        _cachedPixBufAttrs = @{
+            (__bridge NSString *)kCVPixelBufferPixelFormatTypeKey: @(fmt),
+            (__bridge NSString *)kCVPixelBufferMetalCompatibilityKey: @YES,
+            (__bridge NSString *)kCVPixelBufferIOSurfacePropertiesKey: @{},
+        };
+        if (_cachedOutFmtDesc) { CFRelease(_cachedOutFmtDesc); _cachedOutFmtDesc = NULL; }
+        if (_pixelBufferPool) { CFRelease(_pixelBufferPool); _pixelBufferPool = NULL; }
+
+        // Cria pool para reciclar pixel buffers (evita alloc+IOSurface por frame)
+        NSDictionary *poolAttrs = @{
+            (__bridge NSString *)kCVPixelBufferPoolMinimumBufferCountKey: @3,
+        };
+        NSDictionary *pbAttrs = @{
+            (__bridge NSString *)kCVPixelBufferPixelFormatTypeKey: @(fmt),
+            (__bridge NSString *)kCVPixelBufferWidthKey: @(width),
+            (__bridge NSString *)kCVPixelBufferHeightKey: @(height),
+            (__bridge NSString *)kCVPixelBufferMetalCompatibilityKey: @YES,
+            (__bridge NSString *)kCVPixelBufferIOSurfacePropertiesKey: @{},
+        };
+        CVPixelBufferPoolCreate(kCFAllocatorDefault,
+                                (__bridge CFDictionaryRef)poolAttrs,
+                                (__bridge CFDictionaryRef)pbAttrs,
+                                &_pixelBufferPool);
+    }
+
     CVPixelBufferRef outPixBuf = NULL;
-    NSDictionary *attrs = @{
-        (__bridge NSString *)kCVPixelBufferPixelFormatTypeKey: @(fmt),
-        (__bridge NSString *)kCVPixelBufferMetalCompatibilityKey: @YES,
-        (__bridge NSString *)kCVPixelBufferIOSurfacePropertiesKey: @{},
-    };
-    CVPixelBufferCreate(kCFAllocatorDefault, width, height, fmt,
-                        (__bridge CFDictionaryRef)attrs, &outPixBuf);
+    if (_pixelBufferPool) {
+        CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, _pixelBufferPool, &outPixBuf);
+    }
+    if (!outPixBuf) {
+        // Fallback: direct alloc se pool falhou
+        CVPixelBufferCreate(kCFAllocatorDefault, width, height, fmt,
+                            (__bridge CFDictionaryRef)_cachedPixBufAttrs, &outPixBuf);
+    }
 
     if (outPixBuf) {
         [self.ciContext render:ciImage toCVPixelBuffer:outPixBuf];
@@ -264,16 +316,17 @@
                           fromOriginal:(CMSampleBufferRef)original {
     if (!pixBuf) return NULL;
 
-    CMVideoFormatDescriptionRef fmt = NULL;
-    CMVideoFormatDescriptionCreateForImageBuffer(kCFAllocatorDefault, pixBuf, &fmt);
+    // Cache format description — only recreate when resolution/format changes
+    if (!_cachedOutFmtDesc) {
+        CMVideoFormatDescriptionCreateForImageBuffer(kCFAllocatorDefault, pixBuf, &_cachedOutFmtDesc);
+    }
 
     CMSampleTimingInfo timing;
     CMSampleBufferGetSampleTimingInfo(original, 0, &timing);
 
     CMSampleBufferRef outSample = NULL;
     CMSampleBufferCreateForImageBuffer(kCFAllocatorDefault, pixBuf, YES,
-                                       NULL, NULL, fmt, &timing, &outSample);
-    if (fmt) CFRelease(fmt);
+                                       NULL, NULL, _cachedOutFmtDesc, &timing, &outSample);
     return outSample;
 }
 
@@ -388,15 +441,79 @@ static const float kMaxPan = 500.0f;
 
 - (void)_avs_fp_wrapBuf:(CMSampleBufferRef)buf {
     // Manage retain/release manually: the property is 'assign' (ARC doesn't manage CF types).
+    // Protegido pelo _transformLock para evitar race com leitura em processFrame:
+    os_unfair_lock_lock(&_transformLock);
     CMSampleBufferRef old = self.lastBlendedBuffer;
     if (buf) CFRetain(buf);
     self.lastBlendedBuffer = buf;
+    os_unfair_lock_unlock(&_transformLock);
     if (old) CFRelease(old);
 }
 
 - (void)_avs_fp_transition:(id)transition duration:(double)duration {
-    // Transição suave entre fontes (fade, dissolve)
-    // Usa CIAdditionCompositing com alpha decrescente
+    // Transição suave entre fontes (fade/dissolve)
+    // Ativa blend temporariamente durante a transição
+    os_unfair_lock_lock(&_transformLock);
+    _blendEnabled = YES;
+    os_unfair_lock_unlock(&_transformLock);
+
+    // Desativa blend após a duração da transição
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(duration * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        os_unfair_lock_lock(&self->_transformLock);
+        self->_blendEnabled = self->_frameBlendEnabled; // restaura estado anterior
+        os_unfair_lock_unlock(&self->_transformLock);
+    });
+}
+
+// -----------------------------------------------------------------------
+// Metal shader source (fallback caso o binário não contenha o .metallib)
+// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
+// Backpressure: limita frames em voo para evitar memory pressure
+// -----------------------------------------------------------------------
+- (int)backpressureInFlightThresholdForMode:(int)mode {
+    switch (mode) {
+        case 0: return 3;   // stream: máx 3 frames em decode simultâneo
+        case 1: return 2;   // gallery: máx 2
+        case 2: return 4;   // filtered: máx 4 (GPU-bound)
+        default: return 3;
+    }
+}
+
+- (int)backpressureOutstandingMaxForMode:(int)mode {
+    switch (mode) {
+        case 0: return 5;
+        case 1: return 3;
+        case 2: return 6;
+        default: return 5;
+    }
+}
+
+// -----------------------------------------------------------------------
+// Garante que o blend buffer existe e corresponde ao formato atual
+// -----------------------------------------------------------------------
+- (void)ensureStreamBlendBufferWidth:(size_t)width
+                              height:(size_t)height
+                              format:(OSType)format {
+    os_unfair_lock_lock(&_transformLock);
+    CMSampleBufferRef current = self.lastBlendedBuffer;
+    if (current) {
+        CVPixelBufferRef pb = CMSampleBufferGetImageBuffer(current);
+        if (pb) {
+            size_t curW = CVPixelBufferGetWidth(pb);
+            size_t curH = CVPixelBufferGetHeight(pb);
+            OSType curF = CVPixelBufferGetPixelFormatType(pb);
+            if (curW == width && curH == height && curF == format) {
+                os_unfair_lock_unlock(&_transformLock);
+                return; // já compatível
+            }
+        }
+        // Formato mudou: descarta buffer antigo
+        CFRelease(current);
+        self.lastBlendedBuffer = NULL;
+    }
+    os_unfair_lock_unlock(&_transformLock);
 }
 
 // -----------------------------------------------------------------------

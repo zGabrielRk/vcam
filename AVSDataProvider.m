@@ -3,7 +3,6 @@
 // AVSLocalDataProvider: reprodução de vídeo/foto da galeria com AVAssetReader
 
 #import "AVSDataProvider.h"
-#import "AVSIPCTransport.h"  // for IOSurfaceRef forward decl
 #import <AVFoundation/AVFoundation.h>
 #import <PhotosUI/PhotosUI.h>
 
@@ -16,9 +15,8 @@
     NSLock           *_readerLock;
     int               _currentFPS;
     BOOL              _loop;
-    CVPixelBufferRef  _staticPixelBuffer;  // retained; used for still-image loop
-    BOOL              _isVideo;
-    BOOL              _isReady;
+    CVPixelBufferRef  _staticPixelBuffer;              // retained; used for still-image loop
+    CMVideoFormatDescriptionRef _staticFormatDesc;     // cached; avoids 30x/sec alloc
 }
 
 - (instancetype)init {
@@ -41,7 +39,6 @@
 // Carrega uma URL de vídeo (public.movie) ou imagem (public.image)
 // -----------------------------------------------------------------------
 - (void)_avs_dat_loadVid:(NSURL *)url {
-    AVSLogWrite(@"[avsd-DATA] _avs_dat_loadVid: %@", url.path);
     [self _avs_dat_stop];
     self.isVideo = YES;
 
@@ -53,7 +50,7 @@
     NSError *error = nil;
     self.assetReader = [AVAssetReader assetReaderWithAsset:asset error:&error];
     if (error) {
-        AVSLogWrite(@"[avsd] AVAssetReader error: %@", error);
+        NSLog(@"[avsd] AVAssetReader error: %@", error);
         return;
     }
 
@@ -95,7 +92,7 @@
     }
 
     if (![self.assetReader startReading]) {
-        AVSLogWrite(@"[avsd] AVAssetReader startReading failed: %@", self.assetReader.error);
+        NSLog(@"[avsd] AVAssetReader startReading failed: %@", self.assetReader.error);
         return;
     }
 
@@ -104,7 +101,6 @@
 }
 
 - (void)_avs_dat_loadImg:(NSURL *)url {
-    AVSLogWrite(@"[avsd-DATA] _avs_dat_loadImg: %@", url.path);
     [self _avs_dat_stop];
     self.isVideo = NO;
 
@@ -147,10 +143,11 @@
     }
     _staticPixelBuffer = pixelBuf;  // retained by CVPixelBufferCreate
 
-    // Check IOSurface backing
-    IOSurfaceRef ioSurf = CVPixelBufferGetIOSurface(pixelBuf);
-    AVSLogWrite(@"[avsd-DATA] Image pixelBuffer created %zux%zu IOSurface=%p cb=%p",
-          w, h, ioSurf, self._avs_cfg_onDec);
+    // Pre-create format description once — reused every tick in _avs_dat_popBuf
+    if (_staticFormatDesc) { CFRelease(_staticFormatDesc); _staticFormatDesc = NULL; }
+    CMVideoFormatDescriptionCreateForImageBuffer(kCFAllocatorDefault,
+                                                 _staticPixelBuffer,
+                                                 &_staticFormatDesc);
 
     self.isReady = YES;
     [self _avs_dat_resume];  // start 30 fps delivery timer
@@ -203,6 +200,10 @@
         self.audioOutput = nil;
     }
     [_readerLock unlock];
+    if (_staticFormatDesc) {
+        CFRelease(_staticFormatDesc);
+        _staticFormatDesc = NULL;
+    }
     if (_staticPixelBuffer) {
         CVPixelBufferRelease(_staticPixelBuffer);
         _staticPixelBuffer = NULL;
@@ -219,19 +220,12 @@
 // -----------------------------------------------------------------------
 // Pop do próximo frame do buffer
 // -----------------------------------------------------------------------
-static int _popBufCount = 0;
 - (void)_avs_dat_popBuf {
     if (!_isRunning || _isPaused || !self.isReady) return;
-    _popBufCount++;
 
-    // Static image: wrap the CVPixelBuffer in a new CMSampleBuffer each tick
+    // Static image: wrap the cached CVPixelBuffer in a CMSampleBuffer each tick
     if (!_isVideo) {
-        if (!_staticPixelBuffer) return;
-
-        CMVideoFormatDescriptionRef fmt = NULL;
-        CMVideoFormatDescriptionCreateForImageBuffer(kCFAllocatorDefault,
-                                                     _staticPixelBuffer, &fmt);
-        if (!fmt) return;
+        if (!_staticPixelBuffer || !_staticFormatDesc) return;
 
         CMSampleTimingInfo timing = {
             .duration              = CMTimeMake(1, _currentFPS),
@@ -240,16 +234,11 @@ static int _popBufCount = 0;
         };
         CMSampleBufferRef sampleBuf = NULL;
         CMSampleBufferCreateForImageBuffer(kCFAllocatorDefault, _staticPixelBuffer,
-                                           YES, NULL, NULL, fmt, &timing, &sampleBuf);
-        CFRelease(fmt);
+                                           YES, NULL, NULL,
+                                           _staticFormatDesc, &timing, &sampleBuf);
         if (!sampleBuf) return;
         if (self._avs_cfg_onDec) {
-            if (_popBufCount % 60 == 1) {
-                AVSLogWrite(@"[avsd-DATA] #%d delivering image frame cb=%p", _popBufCount, self._avs_cfg_onDec);
-            }
             self._avs_cfg_onDec(sampleBuf);
-        } else if (_popBufCount % 60 == 1) {
-            AVSLogWrite(@"[avsd-DATA] #%d WARNING: _avs_cfg_onDec is NULL, frame dropped", _popBufCount);
         }
         CFRelease(sampleBuf);
         return;
@@ -275,12 +264,7 @@ static int _popBufCount = 0;
     _framesAdvanced++;
     // Entrega frame ao coordinator via callback registrado em setDataSource:
     if (self._avs_cfg_onDec) {
-        if (_popBufCount % 60 == 1) {
-            AVSLogWrite(@"[avsd-DATA] #%d delivering video frame #%d", _popBufCount, _framesAdvanced);
-        }
         self._avs_cfg_onDec(sampleBuf);
-    } else if (_popBufCount % 60 == 1) {
-        AVSLogWrite(@"[avsd-DATA] #%d WARNING: _avs_cfg_onDec is NULL for video frame", _popBufCount);
     }
     CFRelease(sampleBuf);
 }
@@ -315,65 +299,12 @@ static int _popBufCount = 0;
 }
 
 // -----------------------------------------------------------------------
-// PHPickerViewController delegate
+// PHPickerViewController presentation & delegate
+// Picker is presented and handled by AVSPreferencePanel.
+// These stubs satisfy the AVSDataProvider protocol.
 // -----------------------------------------------------------------------
-- (void)_avs_dat_picker {
-    // Abre PHPickerViewController para seleção de mídia
-    PHPickerConfiguration *config = [[PHPickerConfiguration alloc]
-                                     initWithPhotoLibrary:[PHPhotoLibrary sharedPhotoLibrary]];
-    config.filter = [PHPickerFilter anyFilterMatchingSubfilters:@[
-        PHPickerFilter.videosFilter,
-        PHPickerFilter.imagesFilter,
-    ]];
-    config.selectionLimit = 1;
-
-    PHPickerViewController *picker = [[PHPickerViewController alloc] initWithConfiguration:config];
-    picker.delegate = self;
-
-    // Apresenta picker sobre a janela atual
-    // [topVC presentViewController:picker animated:YES completion:nil];
-}
-
-- (void)_avs_dat_dismissPkr {
-    // Descarta o picker
-}
-
-- (void)picker:(PHPickerViewController *)picker
-didFinishPicking:(NSArray<PHPickerResult *> *)results {
-    [picker dismissViewControllerAnimated:YES completion:^{
-        self.pickerWindow.hidden = YES;
-        self.pickerWindow = nil;
-    }];
-
-    PHPickerResult *result = results.firstObject;
-    if (!result) return;
-
-    NSItemProvider *provider = result.itemProvider;
-
-    if ([provider hasItemConformingToTypeIdentifier:@"public.movie"]) {
-        [provider loadFileRepresentationForTypeIdentifier:@"public.movie"
-                                       completionHandler:^(NSURL *url, NSError *err) {
-            if (url) {
-                // Copia para tmp e carrega
-                NSURL *tmpURL = [[NSURL fileURLWithPath:NSTemporaryDirectory()]
-                                 URLByAppendingPathComponent:url.lastPathComponent];
-                [[NSFileManager defaultManager] copyItemAtURL:url toURL:tmpURL error:nil];
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    [self _avs_dat_loadVid:tmpURL];
-                });
-            }
-        }];
-    } else if ([provider hasItemConformingToTypeIdentifier:@"public.image"]) {
-        [provider loadFileRepresentationForTypeIdentifier:@"public.image"
-                                       completionHandler:^(NSURL *url, NSError *err) {
-            if (url) {
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    [self _avs_dat_loadImg:url];
-                });
-            }
-        }];
-    }
-}
+- (void)_avs_dat_picker    { }
+- (void)_avs_dat_dismissPkr { }
 
 - (void)_avs_dat_cleanExcl:(id)exclusion {
     // Limpa arquivos temporários exceto o especificado
@@ -386,6 +317,11 @@ didFinishPicking:(NSArray<PHPickerResult *> *)results {
         }
     }
 }
+
+- (BOOL)isReady { return _isReady; }
+- (BOOL)isVideo { return _isVideo; }
+- (void)setIsReady:(BOOL)r { _isReady = r; }
+- (void)setIsVideo:(BOOL)v { _isVideo = v; }
 
 @end
 
@@ -410,9 +346,12 @@ didFinishPicking:(NSArray<PHPickerResult *> *)results {
 - (void)_avs_dat_resume      { _isPaused = NO; _isRunning = YES; }
 - (void)_avs_dat_stop        { _isRunning = NO; _isReady = NO; }
 - (void)_avs_dat_cleanup     { [self _avs_dat_stop]; }
+- (void)_avs_dat_picker      { }
 - (void)_avs_dat_dismissPkr  { }
 - (void)_avs_dat_loadImg:(NSURL *)url { }
 - (void)_avs_dat_loadVid:(NSURL *)url { }
 - (void)_avs_dat_cleanExcl:(id)exclusion { }
+- (BOOL)isVideo { return _isVideo; }
+- (BOOL)isReady { return _isReady; }
 
 @end

@@ -15,6 +15,12 @@
 - (void)_avs_ov_hidePnl;
 - (void)_avs_ov_updIcon;
 
+// Combo toggle (Volume+Volume- simultaneous)
+- (void)_avs_ov_showPnlC;
+
+// Video control update
+- (void)_avs_ov_updVidCtrl:(NSDictionary *)state;
+
 // Registered via CFNotificationCenter for lock state
 @property (nonatomic, assign) BOOL _isScreenLocked;
 

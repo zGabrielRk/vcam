@@ -18,6 +18,7 @@
 - (void)_avs_dat_resume;
 - (void)_avs_dat_stop;
 - (void)_avs_dat_cleanup;
+- (void)_avs_dat_picker;         // present photo picker
 - (void)_avs_dat_dismissPkr;     // dismiss photo picker
 - (void)_avs_dat_loadImg:(NSURL *)url;
 - (void)_avs_dat_loadVid:(NSURL *)url;
@@ -71,8 +72,8 @@
 @property (nonatomic, strong) UIWindow *pickerWindow;
 
 // Loop / advance
-@property (nonatomic, assign) int  framesAdvanced;
-@property (nonatomic, strong) id   nextLoopReader;   // next AVAssetReader for seamless loop
+@property (nonatomic, assign) int  _framesAdvanced;
+@property (nonatomic, strong) id   _nextLoopReader;  // next AVAssetReader for seamless loop
 
 // Callback invoked with each decoded frame (set by AVSFrameCoordinator.setDataSource:)
 @property (nonatomic, copy) void(^_avs_cfg_onDec)(CMSampleBufferRef frame);

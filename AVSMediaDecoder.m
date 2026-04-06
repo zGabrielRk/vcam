@@ -5,13 +5,6 @@
 #import "AVSMediaDecoder.h"
 #import <VideoToolbox/VideoToolbox.h>
 #import <CoreMedia/CoreMedia.h>
-#import <QuartzCore/QuartzCore.h>
-
-// May be absent in older SDK headers; defined in VideoToolbox/VTDecompressionSession.h on device
-#ifndef kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder
-static CFStringRef const kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder =
-    CFSTR("RequireHardwareAcceleratedVideoDecoder");
-#endif
 
 // Mapeamento de formato detectado nos cstrings:
 // "420v" = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
@@ -22,12 +15,13 @@ static CFStringRef const kVTVideoDecoderSpecification_RequireHardwareAccelerated
 
 @implementation AVSMediaDecoder {
     CMVideoFormatDescriptionRef _formatDesc;
-    int                          _pendingFrames;
+    _Atomic(int)                 _pendingFrames;
     NSLock                      *_sessionLock;
     BOOL                         _needsRecreate;
     uint8_t                     *_paramBuf;
     size_t                       _paramBufLen;
     NSString                    *_formatTag;  // "420v", "420f", etc.
+    CMVideoFormatDescriptionRef  _cachedWrapFmtDesc;
 }
 
 - (instancetype)init {
@@ -47,6 +41,10 @@ static CFStringRef const kVTVideoDecoderSpecification_RequireHardwareAccelerated
     if (_formatDesc) {
         CFRelease(_formatDesc);
         _formatDesc = NULL;
+    }
+    if (_cachedWrapFmtDesc) {
+        CFRelease(_cachedWrapFmtDesc);
+        _cachedWrapFmtDesc = NULL;
     }
     free(_paramBuf);
 }
@@ -95,27 +93,33 @@ static CFStringRef const kVTVideoDecoderSpecification_RequireHardwareAccelerated
 
     [_sessionLock lock];
 
-    // Converte Annex-B para AVCC (troca start code 00 00 00 01 por tamanho)
-    NSMutableData *avccData = [NSMutableData dataWithLength:nalData.length];
-    memcpy(avccData.mutableBytes, nalData.bytes, nalData.length);
-    // Substitui 0x00000001 pelo tamanho em big-endian
-    uint8_t *buf = avccData.mutableBytes;
-    uint32_t payloadLen = (uint32_t)(nalData.length - 4);
-    buf[0] = (payloadLen >> 24) & 0xFF;
-    buf[1] = (payloadLen >> 16) & 0xFF;
-    buf[2] = (payloadLen >>  8) & 0xFF;
-    buf[3] = (payloadLen      ) & 0xFF;
-
-    // Cria CMBlockBuffer
+    // Converte Annex-B para AVCC: aloca CMBlockBuffer com cópia própria dos dados,
+    // depois patch dos 4 bytes de start code in-place para AVCC length header.
+    // O CMBlockBuffer gerencia sua própria memória — seguro para VT async decode.
+    size_t nalLen = nalData.length;
     CMBlockBufferRef blockBuf = NULL;
     OSStatus st = CMBlockBufferCreateWithMemoryBlock(
         kCFAllocatorDefault,
-        avccData.mutableBytes,
-        avccData.length,
-        kCFAllocatorNull,  // não libera — NSData gerencia
-        NULL, 0, avccData.length,
-        0, &blockBuf
+        NULL,              // NULL = aloca buffer interno
+        nalLen,
+        kCFAllocatorDefault,
+        NULL, 0, nalLen,
+        kCMBlockBufferAssureMemoryNowFlag, &blockBuf
     );
+    if (st == noErr) {
+        st = CMBlockBufferReplaceDataBytes(nalData.bytes, blockBuf, 0, nalLen);
+    }
+    if (st == noErr) {
+        // Patch start code (00 00 00 01) → AVCC length header (big-endian)
+        uint32_t payloadLen = (uint32_t)(nalLen - 4);
+        uint8_t hdr[4] = {
+            (payloadLen >> 24) & 0xFF,
+            (payloadLen >> 16) & 0xFF,
+            (payloadLen >>  8) & 0xFF,
+            (payloadLen      ) & 0xFF
+        };
+        st = CMBlockBufferReplaceDataBytes(hdr, blockBuf, 0, 4);
+    }
 
     if (st != noErr) {
         [_sessionLock unlock];
@@ -124,7 +128,7 @@ static CFStringRef const kVTVideoDecoderSpecification_RequireHardwareAccelerated
 
     // Cria CMSampleBuffer
     CMSampleBufferRef sampleBuf = NULL;
-    const size_t sampleSizes[] = { avccData.length };
+    const size_t sampleSizes[] = { nalLen };
     CMSampleTimingInfo timing = {
         .duration = CMTimeMake(1, 30),
         .presentationTimeStamp = CMTimeMake(seq, 30),
@@ -155,7 +159,7 @@ static CFStringRef const kVTVideoDecoderSpecification_RequireHardwareAccelerated
         _session,
         sampleBuf,
         flags,
-        (void *)(__bridge void *)@(seq),
+        (void *)(intptr_t)seq,  // raw int — evita NSNumber autoreleased em decode async
         &infoFlags
     );
 
@@ -172,6 +176,12 @@ static CFStringRef const kVTVideoDecoderSpecification_RequireHardwareAccelerated
 // -----------------------------------------------------------------------
 - (void)_avs_dec_recreate:(CMVideoFormatDescriptionRef)fmtDesc {
     [self _destroySession];
+
+    // Invalida cache de format description do wrapper (formato mudou)
+    if (_cachedWrapFmtDesc) {
+        CFRelease(_cachedWrapFmtDesc);
+        _cachedWrapFmtDesc = NULL;
+    }
 
     _formatDesc = fmtDesc;
     CFRetain(_formatDesc);
@@ -244,7 +254,7 @@ static void _avs_dec_output_callback(
     CMTime presentationDuration
 ) {
     AVSMediaDecoder *decoder = (__bridge AVSMediaDecoder *)refCon;
-    int seqNum = (int)[(__bridge NSNumber *)frameRefCon intValue];
+    int seqNum = (int)(intptr_t)frameRefCon;
 
     decoder->_pendingFrames--;
 
@@ -267,10 +277,13 @@ static void _avs_dec_output_callback(
 // Wrapa CVPixelBuffer em CMSampleBuffer para entrega
 // -----------------------------------------------------------------------
 - (CMSampleBufferRef)_avs_dec_wrapBuf:(CVPixelBufferRef)pixelBuffer {
-    CMVideoFormatDescriptionRef fmt = NULL;
-    OSStatus st = CMVideoFormatDescriptionCreateForImageBuffer(
-        kCFAllocatorDefault, pixelBuffer, &fmt);
-    if (st != noErr) return NULL;
+    // Cache format description — only recreate when format changes
+    // (decoder output format is constant for the lifetime of a VTDecompressionSession)
+    if (!_cachedWrapFmtDesc) {
+        CMVideoFormatDescriptionCreateForImageBuffer(
+            kCFAllocatorDefault, pixelBuffer, &_cachedWrapFmtDesc);
+    }
+    if (!_cachedWrapFmtDesc) return NULL;
 
     CMSampleTimingInfo timing = {
         .duration = kCMTimeInvalid,
@@ -279,16 +292,15 @@ static void _avs_dec_output_callback(
     };
 
     CMSampleBufferRef sampleBuf = NULL;
-    st = CMSampleBufferCreateForImageBuffer(
+    OSStatus st = CMSampleBufferCreateForImageBuffer(
         kCFAllocatorDefault,
         pixelBuffer,
         YES,          // dataReady
         NULL, NULL,   // makeDataReadyCallback
-        fmt,
+        _cachedWrapFmtDesc,
         &timing,
         &sampleBuf
     );
-    CFRelease(fmt);
     return (st == noErr) ? sampleBuf : NULL;
 }
 

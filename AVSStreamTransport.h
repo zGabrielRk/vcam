@@ -3,11 +3,9 @@
 // Mach-O arm64 universal binary, CydiaSubstrate tweak for jailbroken iOS
 
 #import <Foundation/Foundation.h>
+#import "AVSTransportDelegate.h"
 
-@protocol AVSTransportDelegate <NSObject>
-- (void)_avs_tr_didLink;
-- (void)_avs_tr_onLink:(id)link;
-@end
+@class VCDefaultStrategy;
 
 // NSURLSession WebSocket-based transport layer
 // Connects to LordVCAM Server on PC via WiFi (port 8765) or USB
@@ -29,6 +27,7 @@
 @property (nonatomic, assign) BOOL isRunning;
 @property (nonatomic, assign) BOOL lockStateRegistered;
 @property (nonatomic, weak)   id<AVSTransportDelegate> delegate;
+@property (nonatomic, strong) VCDefaultStrategy *connectionStrategy;
 
 // Connection management
 - (void)connectToServer:(NSString *)address;
@@ -43,6 +42,9 @@
 // Frame/audio delivery
 - (void)sendFrame:(id)frame data:(NSData *)data;
 - (void)sendPingWithPongReceiveHandler:(id)handler;
+
+// Pop latest received frame (used by coordinator)
+- (NSData *)_avs_str_popLatest;
 
 // WebSocket upgrade (USB/local mode)
 // Handshake: HTTP/1.1 101 Switching Protocols
