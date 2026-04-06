@@ -57,6 +57,7 @@ static void _avs_ov_onBlank(CFNotificationCenterRef center,
     SEL       _frontAppSel;             // cache do SEL privado
     BOOL      _frontAppSelResponds;     // cache do respondsToSelector: (invariante)
 }
+@synthesize _isScreenLocked;
 
 - (instancetype)init {
     self = [super init];

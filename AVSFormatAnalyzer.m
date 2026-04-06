@@ -14,9 +14,6 @@ static NSString *avs_pixfmt_tag(OSType fmt) {
         case kCVPixelFormatType_32BGRA:                        return @"BGRA";
         case kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange: return @"p420";
         case kCVPixelFormatType_420YpCbCr10BiPlanarFullRange:  return @"pf20";
-        // Extended HEVC formats
-        case 'x420': return @"x420";
-        case 'xf20': return @"xf20";
         // ProRes
         case kCVPixelFormatType_422YpCbCr8:                   return @"2vuy";
         default: {
@@ -30,11 +27,6 @@ static NSString *avs_pixfmt_tag(OSType fmt) {
     }
 }
 
-// _fpsAccumulator e _lastMetricsLog são @property com underscore:
-// @synthesize explícito evita duplo-underscore no ivar sintetizado.
-@synthesize _fpsAccumulator = _fpsAccumulator;
-@synthesize _lastMetricsLog = _lastMetricsLog;
-
 @implementation AVSFormatAnalyzer {
     NSString   *_pixelFmtTag;
     int         _width;
@@ -44,6 +36,8 @@ static NSString *avs_pixfmt_tag(OSType fmt) {
     NSString      *_cachedInfo;    // rebuilt only when format/resolution changes
     os_unfair_lock _lock;
 }
+@synthesize _fpsAccumulator;
+@synthesize _lastMetricsLog;
 
 - (instancetype)init {
     self = [super init];
@@ -87,7 +81,6 @@ static NSString *avs_pixfmt_tag(OSType fmt) {
 
     // EMA de FPS via timestamp de apresentação
     CMTime pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
-    double newFPS = 0.0;
     double ts = 0.0;
     if (CMTIME_IS_VALID(pts)) {
         ts = CMTimeGetSeconds(pts);
