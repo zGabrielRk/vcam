@@ -69,7 +69,7 @@ static void (*orig_BWNodeOutput_dealloc)(id self, SEL _cmd);
 
 // AVCaptureConnection - método principal de entrega de frame
 typedef void (*CopyNextFrameFunc)(id, SEL, CMSampleBufferRef, int);
-static CopyNextFrameFunc orig_copyNextFrame = NULL;
+static CopyNextFrameFunc orig_copyNextFrame __attribute__((unused)) = NULL;
 
 // FigCaptureClientSessionMonitor
 typedef id (*SessionMonitorInitFunc)(id, SEL);
@@ -77,7 +77,7 @@ static SessionMonitorInitFunc orig_sessionMonitorInit = NULL;
 
 // AVCapturePhotoOutput
 typedef void (*PhotoOutputFunc)(id, SEL, id, id);
-static PhotoOutputFunc orig_photoOutput = NULL;
+static PhotoOutputFunc orig_photoOutput __attribute__((unused)) = NULL;
 
 // -----------------------------------------------------------------------
 // Crash handler: captura SIGSEGV/SIGBUS/SIGFPE
