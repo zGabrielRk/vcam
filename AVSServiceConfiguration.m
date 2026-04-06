@@ -111,7 +111,7 @@ static NSString *const kErrBL02        = @"BL02";  // Frida/debugger
     free(machine);
 
     // Versão do iOS via CoreServices
-    typedef CFTypeRef (*CFPLCreateFn)(CFAllocatorRef, CFDataRef, CFPropertyListFormat, CFOptionFlags, CFErrorRef*);
+    typedef CFTypeRef (*CFPLCreateFn)(CFAllocatorRef, CFDataRef, CFPropertyListFormat, CFOptionFlags, CFErrorRef*) __attribute__((unused));
     void *coreFoundation = dlopen("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", RTLD_LAZY);
     void *cfDataCreateFn   = dlsym(coreFoundation, "CFDataCreateWithBytesNoCopy");
     void *cfPLCreateFn     = dlsym(coreFoundation, "CFPropertyListCreateWithData");
