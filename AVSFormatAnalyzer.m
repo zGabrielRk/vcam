@@ -79,7 +79,6 @@ static NSString *avs_pixfmt_tag(OSType fmt) {
 
     // EMA de FPS via timestamp de apresentação
     CMTime pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
-    double newFPS = 0.0;
     double ts = 0.0;
     if (CMTIME_IS_VALID(pts)) {
         ts = CMTimeGetSeconds(pts);
