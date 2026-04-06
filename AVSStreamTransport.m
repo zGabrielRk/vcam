@@ -348,7 +348,19 @@ didReceiveChallenge:(NSURLAuthenticationChallenge *)challenge
     SecTrustRef trust = challenge.protectionSpace.serverTrust;
     if (trust) {
         // Extrai certificado e verifica SPKI
-        SecCertificateRef cert = SecTrustGetCertificateAtIndex(trust, 0);
+        SecCertificateRef cert = NULL;
+        if (@available(iOS 15.0, *)) {
+            CFArrayRef certs = SecTrustCopyCertificateChain(trust);
+            if (certs && CFArrayGetCount(certs) > 0) {
+                cert = (SecCertificateRef)CFArrayGetValueAtIndex(certs, 0);
+            }
+            if (certs) CFRelease(certs);
+        } else {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+            cert = SecTrustGetCertificateAtIndex(trust, 0);
+#pragma clang diagnostic pop
+        }
         if (cert) {
             NSData *certData = (__bridge_transfer NSData *)SecCertificateCopyData(cert);
             // Calcula SHA256 do SPKI e compara
