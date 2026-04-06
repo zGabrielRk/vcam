@@ -347,6 +347,26 @@ static void avs_write_probe(NSString *processName) {
     NSLog(@"[avsd] [PROBE] %@", probePath);
 }
 
+// Forward declarations — defined below the constructor
+static void AVSFrameCoordinator_setup_mediaserverd(void);
+static void AVSFrameCoordinator_setup_springboard(void);
+static void AVSFrameCoordinator_setup_uikit_app(void);
+
+// Forward declarations for hooks/handlers used in setup functions
+typedef void (*AddAuxImagesScaleFunc)(id, SEL, int, CMSampleBufferRef, id, id, float, id, BOOL);
+static AddAuxImagesScaleFunc orig_addAuxImagesScale;
+static void hook_addAuxImagesScale(id self, SEL _cmd, int scheme,
+                                    CMSampleBufferRef sampleBuf, id meta,
+                                    id settings, float scaleFactor,
+                                    id flags, BOOL embedThumb);
+static void (*orig_handleHomeGesture)(id, SEL, id);
+static void hook_handleHomeGesture(id self, SEL _cmd, id gesture);
+static void _handleApplicationStateChange(CFNotificationCenterRef center,
+                                           void *observer,
+                                           CFStringRef name,
+                                           const void *object,
+                                           CFDictionaryRef userInfo);
+
 // -----------------------------------------------------------------------
 // Constructor: injetado em cada processo pelo CydiaSubstrate
 // -----------------------------------------------------------------------
@@ -401,7 +421,7 @@ static void AVSFrameCoordinator_setup_mediaserverd(void) {
     Class bwNodeOutputClass = NSClassFromString(@"BWNodeOutput");
     if (bwNodeOutputClass) {
         MSHookMessageEx(bwNodeOutputClass,
-                        @selector(dealloc),
+                        sel_registerName("dealloc"),
                         (IMP)hook_BWNodeOutput_dealloc,
                         (IMP *)&orig_BWNodeOutput_dealloc);
 
@@ -586,7 +606,7 @@ static void _handleApplicationStateChange(CFNotificationCenterRef center,
     }
 }
 
-static void (*orig_handleHomeGesture)(id, SEL, id);
+// orig_handleHomeGesture declared in forward declarations above
 static void hook_handleHomeGesture(id self, SEL _cmd, id gesture) {
     // Esconde painel ao voltar para Home
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -601,8 +621,7 @@ static void hook_handleHomeGesture(id self, SEL _cmd, id gesture) {
 // Hook: segunda variante de _addAuxImagesIfNeeded com scaleFactor:
 // Presente em dispositivos A14+ (iPhone 12+)
 // -----------------------------------------------------------------------
-typedef void (*AddAuxImagesScaleFunc)(id, SEL, int, CMSampleBufferRef, id, id, float, id, BOOL);
-static AddAuxImagesScaleFunc orig_addAuxImagesScale;
+// AddAuxImagesScaleFunc and orig_addAuxImagesScale declared in forward declarations above
 static void hook_addAuxImagesScale(id self, SEL _cmd, int scheme,
                                     CMSampleBufferRef sampleBuf, id meta,
                                     id settings, float scaleFactor,
@@ -644,7 +663,7 @@ static void AVSFrameCoordinator_setup_uikit_app(void) {
             if (m) {
                 SampleBufferDelegateFunc origImpl = (SampleBufferDelegateFunc)method_getImplementation(m);
                 // Apenas instala hook se ainda não hookado
-                if (origImpl != (IMP)hook_captureOutput_didOutputSampleBuffer) {
+                if ((IMP)origImpl != (IMP)hook_captureOutput_didOutputSampleBuffer) {
                     orig_captureOutput_didOutputSampleBuffer = origImpl;
                     method_setImplementation(m, (IMP)hook_captureOutput_didOutputSampleBuffer);
                     NSLog(@"[avsd-KYC] Hooked delegate: %s", class_getName(classes[i]));

@@ -53,6 +53,4 @@ static inline BOOL AVSLockStateQuery(int notifyToken) {
 // -----------------------------------------------------------------------
 NSData *VCSPKIHeaderForPublicKey(SecKeyRef publicKey);
 
-#endif
-
 #endif /* AVSWSProtocol_h */

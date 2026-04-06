@@ -5,6 +5,7 @@
 #import "AVSMediaDecoder.h"
 #import <VideoToolbox/VideoToolbox.h>
 #import <CoreMedia/CoreMedia.h>
+#import <QuartzCore/QuartzCore.h>
 
 // Mapeamento de formato detectado nos cstrings:
 // "420v" = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
@@ -201,7 +202,7 @@
     };
 
     NSDictionary *sessAttrs = @{
-        (__bridge NSString *)kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder: @YES,
+        @"RequireHardwareAcceleratedVideoDecoder": @YES,
     };
 
     OSStatus st = VTDecompressionSessionCreate(
