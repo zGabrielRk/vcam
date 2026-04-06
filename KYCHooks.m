@@ -12,6 +12,7 @@
 #import <signal.h>
 #import <execinfo.h>
 #import <mach/mach.h>
+#import <os/log.h>
 
 #import "AVSFrameCoordinator.h"
 #import "AVSRenderPipeline.h"
@@ -37,6 +38,7 @@ void AVSLogWrite(NSString *format, ...) {
     NSString *ts = [NSString stringWithFormat:@"%.3f", CACurrentMediaTime()];
     NSString *line = [NSString stringWithFormat:@"[%@] %@\n", ts, msg];
 
+    // Write to file (always works)
     if (!gLogLock) gLogLock = [[NSLock alloc] init];
     [gLogLock lock];
     NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:kAVSLogPath];
@@ -49,8 +51,8 @@ void AVSLogWrite(NSString *format, ...) {
     [fh closeFile];
     [gLogLock unlock];
 
-    // Also NSLog for good measure
-    NSLog(@"%@", msg);
+    // os_log with ERROR level — NEVER filtered by iOS, always visible in idevicesyslog
+    os_log_error(OS_LOG_DEFAULT, "%{public}@", msg);
 }
 
 // Singleton global do coordinator
