@@ -3,15 +3,12 @@
 // Classe central: orquestra toda a pipeline de injeção de frames
 
 #import "AVSFrameCoordinator.h"
-#import "AVSStreamTransport.h"
-#import "AVSLocalTransport.h"
 #import "AVSMediaDecoder.h"
 #import "AVSRenderPipeline.h"
 #import "AVSAudioBridge.h"
 #import "AVSMotionSynthesizer.h"
 #import "AVSFormatAnalyzer.h"
 #import "AVSDataProvider.h"
-#import "AVSServiceConfiguration.h"
 #import "AVSWSProtocol.h"
 #import <QuartzCore/QuartzCore.h>
 #import <CommonCrypto/CommonCrypto.h>

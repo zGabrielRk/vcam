@@ -5,6 +5,13 @@
 #import "AVSMediaDecoder.h"
 #import <VideoToolbox/VideoToolbox.h>
 #import <CoreMedia/CoreMedia.h>
+#import <QuartzCore/QuartzCore.h>
+
+// May be absent in older SDK headers; defined in VideoToolbox/VTDecompressionSession.h on device
+#ifndef kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder
+static NSString * const kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder =
+    @"RequireHardwareAcceleratedVideoDecoder";
+#endif
 
 // Mapeamento de formato detectado nos cstrings:
 // "420v" = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
@@ -144,7 +151,6 @@
     VTDecodeInfoFlags infoFlags = 0;
     _pendingFrames++;
 
-    __weak typeof(self) weakSelf = self;
     st = VTDecompressionSessionDecodeFrame(
         _session,
         sampleBuf,

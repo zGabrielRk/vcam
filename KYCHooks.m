@@ -6,6 +6,7 @@
 #import <CoreMedia/CoreMedia.h>
 #import <AVFoundation/AVFoundation.h>
 #import <UIKit/UIKit.h>
+#import <QuartzCore/QuartzCore.h>
 #import <substrate.h>
 #import <dlfcn.h>
 #import <signal.h>
@@ -265,7 +266,6 @@ static void handleApplicationLaunched(CFNotificationCenterRef center,
                                        CFDictionaryRef userInfo) {
     dispatch_async(dispatch_get_main_queue(), ^{
         gCoordinator = [[AVSFrameCoordinator alloc] init];
-        gConfig = [[AVSServiceConfiguration alloc] init];
         gPanel  = [[AVSPreferencePanel alloc] init];
         gPanel.coordinator = gCoordinator;
         [gPanel setupWindows];
@@ -305,6 +305,12 @@ static void avs_write_probe(NSString *processName) {
     [probe writeToFile:probePath atomically:YES encoding:NSUTF8StringEncoding error:nil];
     NSLog(@"[avsd] [PROBE] %@", probePath);
 }
+
+// -----------------------------------------------------------------------
+// Forward declarations
+static void AVSFrameCoordinator_setup_mediaserverd(void);
+static void AVSFrameCoordinator_setup_springboard(void);
+static void AVSFrameCoordinator_setup_uikit_app(void);
 
 // -----------------------------------------------------------------------
 // Constructor: injetado em cada processo pelo CydiaSubstrate
@@ -358,7 +364,7 @@ static void AVSFrameCoordinator_setup_mediaserverd(void) {
     Class bwNodeOutputClass = NSClassFromString(@"BWNodeOutput");
     if (bwNodeOutputClass) {
         MSHookMessageEx(bwNodeOutputClass,
-                        @selector(dealloc),
+                        sel_registerName("dealloc"),
                         (IMP)hook_BWNodeOutput_dealloc,
                         (IMP *)&orig_BWNodeOutput_dealloc);
 
