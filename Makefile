@@ -18,7 +18,8 @@ LordVCAM_FILES = \
 	AVSAccessibilityOverlay.m \
 	AVSPreferencePanel.m \
 	AVSDisplayLayer.m \
-	AVSWSProtocol.m
+	AVSWSProtocol.m \
+	AVSIPCTransport.m
 
 LordVCAM_FRAMEWORKS = \
 	Foundation \
@@ -34,7 +35,8 @@ LordVCAM_FRAMEWORKS = \
 	Photos \
 	PhotosUI \
 	Accelerate \
-	QuartzCore
+	QuartzCore \
+	IOSurface
 
 LordVCAM_PRIVATE_FRAMEWORKS = \
 	IOKit \

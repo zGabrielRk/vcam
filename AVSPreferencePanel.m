@@ -431,7 +431,7 @@ didFinishPicking:(NSArray<PHPickerResult *> *)results {
 - (void)_resetAll { [self.coordinator.renderPipeline _avs_fp_resetFlags]; }
 
 - (void)_avs_cfg_rplChg:(UISwitch *)sw {
-    self.coordinator._avs_cfg_replOn = sw.isOn;
+    [self.coordinator enableReplacement:sw.isOn];
     self._avs_cfg_replOn = sw.isOn;
 }
 

@@ -19,6 +19,7 @@
 #import "AVSAudioBridge.h"
 #import "AVSPreferencePanel.h"
 #import "AVSWSProtocol.h"
+#import "AVSIPCTransport.h"
 
 // Singleton global do coordinator
 static AVSFrameCoordinator *gCoordinator = nil;
@@ -190,10 +191,11 @@ static void handleApplicationLaunched(CFNotificationCenterRef center,
                                        CFDictionaryRef userInfo) {
     dispatch_async(dispatch_get_main_queue(), ^{
         gCoordinator = [[AVSFrameCoordinator alloc] init];
+        [gCoordinator configureIPCAsProducer];
         gPanel  = [[AVSPreferencePanel alloc] init];
         gPanel.coordinator = gCoordinator;
         [gPanel setupWindows];
-        NSLog(@"[avsd] SpringBoard UI initialized");
+        NSLog(@"[avsd] SpringBoard UI initialized (IPC producer)");
     });
 }
 
@@ -280,9 +282,10 @@ static void AVSFrameCoordinator_setup_mediaserverd(void) {
     NSLog(@"[avsd-KYC] dlopen complete");
     (void)cmCaptureCore; (void)cmCapture; (void)frontBoard;
 
-    // Inicializa coordinator global
+    // Inicializa coordinator global + IPC consumer
     gCoordinator = [[AVSFrameCoordinator alloc] init];
-    NSLog(@"[avsd-KYC] KYCCore initialized");
+    [gCoordinator configureIPCAsConsumer];
+    NSLog(@"[avsd-KYC] KYCCore initialized (IPC consumer)");
 
     // Hook BWNodeOutput
     Class bwNodeOutputClass = NSClassFromString(@"BWNodeOutput");

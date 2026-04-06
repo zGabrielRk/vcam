@@ -67,6 +67,7 @@
         (__bridge NSString *)kCVPixelBufferPixelFormatTypeKey:
             @(kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange),
         (__bridge NSString *)kCVPixelBufferMetalCompatibilityKey: @YES,
+        (__bridge NSString *)kCVPixelBufferIOSurfacePropertiesKey: @{},
     };
 
     self.trackOutput = [AVAssetReaderTrackOutput
@@ -117,6 +118,7 @@
         (__bridge NSString *)kCVPixelBufferCGImageCompatibilityKey:         @YES,
         (__bridge NSString *)kCVPixelBufferCGBitmapContextCompatibilityKey: @YES,
         (__bridge NSString *)kCVPixelBufferMetalCompatibilityKey:           @YES,
+        (__bridge NSString *)kCVPixelBufferIOSurfacePropertiesKey:          @{},
     };
     CVPixelBufferRef pixelBuf = NULL;
     CVReturn ret = CVPixelBufferCreate(kCFAllocatorDefault, w, h,
@@ -276,6 +278,7 @@
     NSDictionary *vs = @{
         (__bridge NSString *)kCVPixelBufferPixelFormatTypeKey:
             @(kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange),
+        (__bridge NSString *)kCVPixelBufferIOSurfacePropertiesKey: @{},
     };
     AVAssetReaderTrackOutput *output = [AVAssetReaderTrackOutput
                                        assetReaderTrackOutputWithTrack:vt

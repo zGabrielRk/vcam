@@ -185,4 +185,8 @@
 - (void)setDataSource:(id<AVSDataProvider>)source;
 - (void)enableReplacement:(BOOL)enable;
 - (void)enqueueServerEvent:(NSDictionary *)event;
+
+// IPC — called from KYCHooks to configure cross-process role
+- (void)configureIPCAsProducer;  // SpringBoard
+- (void)configureIPCAsConsumer;  // mediaserverd
 @end
