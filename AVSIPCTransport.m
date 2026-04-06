@@ -1,15 +1,31 @@
 // AVSIPCTransport.m
 // LordVCAM — IPC bridge between SpringBoard and mediaserverd
-// Zero-copy frame sharing via IOSurface + Darwin notifications
+// Zero-copy frame sharing via IOSurface + Darwin notify_set_state
+// No file I/O — works on roothide where /var/tmp/ is per-process virtualized
 
 #import "AVSIPCTransport.h"
 #import <notify.h>
 
 // -----------------------------------------------------------------------
 // AVSIPCSender — SpringBoard side
+// Uses notify_set_state to pass IOSurface ID through kernel (no files)
 // -----------------------------------------------------------------------
 @implementation AVSIPCSender {
     uint32_t _lastSurfaceID;
+    int _frameToken;
+    int _stateToken;
+}
+
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        _frameToken = NOTIFY_TOKEN_INVALID;
+        _stateToken = NOTIFY_TOKEN_INVALID;
+        // Register tokens for setting state
+        notify_register_check(kAVSIPCFrameNotification, &_frameToken);
+        notify_register_check(kAVSIPCStateNotification, &_stateToken);
+    }
+    return self;
 }
 
 static int _pubCount = 0;
@@ -31,46 +47,47 @@ static int _pubCount = 0;
 
     uint32_t sid = IOSurfaceGetID(surface);
 
-    // Only write metadata file when surface ID changes (new allocation)
     if (sid != _lastSurfaceID) {
         _lastSurfaceID = sid;
-
-        NSDictionary *meta = @{
-            @"sid": @(sid),
-            @"w":   @((uint32_t)CVPixelBufferGetWidth(pixelBuffer)),
-            @"h":   @((uint32_t)CVPixelBufferGetHeight(pixelBuffer)),
-            @"fmt": @((uint32_t)CVPixelBufferGetPixelFormatType(pixelBuffer)),
-        };
-        NSData *data = [NSPropertyListSerialization
-                        dataWithPropertyList:meta
-                        format:NSPropertyListBinaryFormat_v1_0
-                        options:0 error:nil];
-        [data writeToFile:kAVSIPCSurfacePath atomically:YES];
-        AVSLogWrite(@"[avsd-IPC] Published surface ID=%u %ux%u fmt=%u",
+        AVSLogWrite(@"[avsd-IPC] Published surface ID=%u %zux%zu fmt=%u",
               sid,
-              (uint32_t)CVPixelBufferGetWidth(pixelBuffer),
-              (uint32_t)CVPixelBufferGetHeight(pixelBuffer),
+              CVPixelBufferGetWidth(pixelBuffer),
+              CVPixelBufferGetHeight(pixelBuffer),
               (uint32_t)CVPixelBufferGetPixelFormatType(pixelBuffer));
     }
 
-    // Signal mediaserverd — lightweight (~5us)
+    // Pass surface ID via kernel notification state (no file I/O)
+    if (_frameToken != NOTIFY_TOKEN_INVALID) {
+        notify_set_state(_frameToken, (uint64_t)sid);
+    }
+
+    // Signal mediaserverd
     notify_post(kAVSIPCFrameNotification);
 }
 
 - (void)publishEnabled:(BOOL)enabled {
-    NSDictionary *state = @{ @"enabled": @(enabled) };
-    NSData *data = [NSPropertyListSerialization
-                    dataWithPropertyList:state
-                    format:NSPropertyListBinaryFormat_v1_0
-                    options:0 error:nil];
-    [data writeToFile:kAVSIPCStatePath atomically:YES];
+    if (_stateToken != NOTIFY_TOKEN_INVALID) {
+        notify_set_state(_stateToken, enabled ? 1 : 0);
+    }
     notify_post(kAVSIPCStateNotification);
     AVSLogWrite(@"[avsd-IPC] Published state enabled=%d", enabled);
 }
 
 - (void)teardown {
     [self publishEnabled:NO];
+    if (_frameToken != NOTIFY_TOKEN_INVALID) {
+        notify_cancel(_frameToken);
+        _frameToken = NOTIFY_TOKEN_INVALID;
+    }
+    if (_stateToken != NOTIFY_TOKEN_INVALID) {
+        notify_cancel(_stateToken);
+        _stateToken = NOTIFY_TOKEN_INVALID;
+    }
     _lastSurfaceID = 0;
+}
+
+- (void)dealloc {
+    [self teardown];
 }
 
 @end
@@ -105,12 +122,12 @@ static int _pubCount = 0;
     notify_register_dispatch(kAVSIPCFrameNotification,
                              &_frameToken,
                              _ipcQueue,
-                             ^(int token) { [ws _handleNewFrame]; });
+                             ^(int token) { [ws _handleNewFrame:token]; });
 
     notify_register_dispatch(kAVSIPCStateNotification,
                              &_stateToken,
                              _ipcQueue,
-                             ^(int token) { [ws _handleStateChange]; });
+                             ^(int token) { [ws _handleStateChange:token]; });
 
     AVSLogWrite(@"[avsd-IPC] Receiver listening for frames and state changes");
 }
@@ -131,18 +148,42 @@ static int _pubCount = 0;
 }
 
 static int _recvFrameCount = 0;
-- (void)_handleNewFrame {
+- (void)_handleNewFrame:(int)token {
     _recvFrameCount++;
-    // Read surface metadata if we don't have a surface yet
-    if (!_attachedSurface || [self _surfaceIDChanged]) {
-        [self _attachSurface];
-    }
-    if (!_attachedSurface) {
+
+    // Get surface ID from kernel notification state (no file I/O)
+    uint64_t state = 0;
+    notify_get_state(token, &state);
+    uint32_t sid = (uint32_t)state;
+
+    if (sid == 0) {
         if (_recvFrameCount % 60 == 1) {
-            AVSLogWrite(@"[avsd-IPC-RX] #%d no attached surface", _recvFrameCount);
+            AVSLogWrite(@"[avsd-IPC-RX] #%d surface ID is 0", _recvFrameCount);
         }
         return;
     }
+
+    // Attach to new surface if ID changed
+    if (sid != _lastSurfaceID || !_attachedSurface) {
+        if (_attachedSurface) {
+            CFRelease(_attachedSurface);
+            _attachedSurface = NULL;
+        }
+        _attachedSurface = IOSurfaceLookup(sid);
+        _lastSurfaceID = sid;
+
+        if (_attachedSurface) {
+            AVSLogWrite(@"[avsd-IPC] Attached to IOSurface ID=%u (%zux%zu)",
+                  sid,
+                  IOSurfaceGetWidth(_attachedSurface),
+                  IOSurfaceGetHeight(_attachedSurface));
+        } else {
+            AVSLogWrite(@"[avsd-IPC] Failed to lookup IOSurface ID=%u", sid);
+            return;
+        }
+    }
+
+    if (!_attachedSurface) return;
 
     // Lock for reading (cross-process safe)
     IOSurfaceLock(_attachedSurface, kIOSurfaceLockReadOnly, NULL);
@@ -197,67 +238,15 @@ static int _recvFrameCount = 0;
     if (sampleBuf) CFRelease(sampleBuf);
 }
 
-- (void)_handleStateChange {
-    NSData *data = [NSData dataWithContentsOfFile:kAVSIPCStatePath];
-    if (!data) return;
+- (void)_handleStateChange:(int)token {
+    uint64_t state = 0;
+    notify_get_state(token, &state);
+    BOOL enabled = (state != 0);
 
-    NSDictionary *state = [NSPropertyListSerialization
-                           propertyListWithData:data
-                           options:NSPropertyListImmutable
-                           format:NULL error:nil];
-    if (!state) return;
-
-    BOOL enabled = [state[@"enabled"] boolValue];
     AVSLogWrite(@"[avsd-IPC] Received state enabled=%d", enabled);
 
     if (self.onStateChanged) {
         self.onStateChanged(enabled);
-    }
-}
-
-- (BOOL)_surfaceIDChanged {
-    NSData *data = [NSData dataWithContentsOfFile:kAVSIPCSurfacePath];
-    if (!data) return NO;
-
-    NSDictionary *meta = [NSPropertyListSerialization
-                          propertyListWithData:data
-                          options:NSPropertyListImmutable
-                          format:NULL error:nil];
-    if (!meta) return NO;
-
-    uint32_t sid = [meta[@"sid"] unsignedIntValue];
-    return sid != _lastSurfaceID;
-}
-
-- (void)_attachSurface {
-    NSData *data = [NSData dataWithContentsOfFile:kAVSIPCSurfacePath];
-    if (!data) return;
-
-    NSDictionary *meta = [NSPropertyListSerialization
-                          propertyListWithData:data
-                          options:NSPropertyListImmutable
-                          format:NULL error:nil];
-    if (!meta) return;
-
-    uint32_t sid = [meta[@"sid"] unsignedIntValue];
-    if (sid == 0) return;
-
-    // Release old surface
-    if (_attachedSurface) {
-        CFRelease(_attachedSurface);
-        _attachedSurface = NULL;
-    }
-
-    _attachedSurface = IOSurfaceLookup(sid);
-    _lastSurfaceID = sid;
-
-    if (_attachedSurface) {
-        AVSLogWrite(@"[avsd-IPC] Attached to IOSurface ID=%u (%zux%zu)",
-              sid,
-              IOSurfaceGetWidth(_attachedSurface),
-              IOSurfaceGetHeight(_attachedSurface));
-    } else {
-        AVSLogWrite(@"[avsd-IPC] Failed to lookup IOSurface ID=%u", sid);
     }
 }
 

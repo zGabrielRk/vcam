@@ -28,10 +28,6 @@ extern CVReturn CVPixelBufferCreateWithIOSurface(CFAllocatorRef allocator, IOSur
 #define kAVSIPCFrameNotification  "com.avsd.ipc.frame"
 #define kAVSIPCStateNotification  "com.avsd.ipc.state"
 
-// Shared file paths (under directory already created by KYCHooks ctor)
-#define kAVSIPCSurfacePath  @"/var/tmp/com.apple.avfcache/ipc_surface.dat"
-#define kAVSIPCStatePath    @"/var/tmp/com.apple.avfcache/ipc_state.dat"
-
 // -----------------------------------------------------------------------
 // Sender — runs in SpringBoard
 // Publishes CVPixelBuffer via IOSurface for mediaserverd to read

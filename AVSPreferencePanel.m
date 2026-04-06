@@ -412,10 +412,15 @@ didFinishPicking:(NSArray<PHPickerResult *> *)results {
         [itemProvider loadFileRepresentationForTypeIdentifier:@"public.image"
                                            completionHandler:^(NSURL *url, NSError *err) {
             if (!url) return;
+            // Copy to tmp BEFORE dispatch — the provider URL is only valid during this block
+            NSURL *tmpURL = [[NSURL fileURLWithPath:NSTemporaryDirectory()]
+                             URLByAppendingPathComponent:url.lastPathComponent];
+            [[NSFileManager defaultManager] removeItemAtURL:tmpURL error:nil];
+            [[NSFileManager defaultManager] copyItemAtURL:url toURL:tmpURL error:nil];
             dispatch_async(dispatch_get_main_queue(), ^{
-                AVSLogWrite(@"[avsd-UI] Loading image: %@", url.path);
+                AVSLogWrite(@"[avsd-UI] Loading image: %@", tmpURL.path);
                 [self.coordinator setDataSource:self->_activeLocalProvider];
-                [self->_activeLocalProvider _avs_dat_loadImg:url];
+                [self->_activeLocalProvider _avs_dat_loadImg:tmpURL];
                 [self.coordinator enableReplacement:YES];
                 self._avs_cfg_rplSw.on = YES;
                 self.statsLabel.text = @"Image loaded. Replacement active.";
