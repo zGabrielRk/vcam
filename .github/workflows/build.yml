@@ -22,7 +22,7 @@ jobs:
         id: theos-cache
         with:
           path: ${{ github.workspace }}/theos
-          key: theos-${{ runner.os }}-16.5
+          key: theos-${{ runner.os }}-16.5-v2
 
       - name: Install system dependencies
         run: |
@@ -39,7 +39,8 @@ jobs:
       - name: Install ldid
         if: steps.theos-cache.outputs.cache-hit != 'true'
         run: |
-          curl -fsSL https://github.com/theos/ldid/releases/latest/download/ldid_linux-x86_64 \
+          curl -fsSL \
+            https://github.com/ProcursusTeam/ldid/releases/latest/download/ldid_linux_x86_64 \
             -o /tmp/ldid
           sudo install -m755 /tmp/ldid /usr/local/bin/ldid
 
@@ -52,8 +53,7 @@ jobs:
             | tar -xJ -C "$THEOS/sdks"
 
       - name: Build .deb
-        run: |
-          make package FINALPACKAGE=1 2>&1
+        run: make package FINALPACKAGE=1
 
       - name: Upload .deb
         uses: actions/upload-artifact@v4
