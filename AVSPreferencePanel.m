@@ -10,20 +10,18 @@
 @interface AVSPreferencePanel () <PHPickerViewControllerDelegate>
 @end
 
-static CGFloat const kPanelWidth   = 320.0f;
-static CGFloat const kPanelHeight  = 460.0f;
+static CGFloat const kPanelWidth   = 300.0f;
+static CGFloat const kPanelHeight  = 480.0f;
 static CGFloat const kButtonSize   = 52.0f;
-static NSString *const kDefaultIP  = @"192.168.0.1";
-static NSString *const kTelegramURL = @"https://t.me/LordVCAM";
-static NSString *const kTelegramSupport = @"https://t.me/lordvcam777";
+static CGFloat const kPad          = 16.0f;
 
 @implementation AVSPreferencePanel {
     NSTimer              *_idleTimer;
     CGFloat               _keyboardOffset;
     BOOL                  _isRegisterMode;
     CGPoint               _dragStartPoint;
-    AVSLocalDataProvider *_activeLocalProvider;  // retained while gallery source is active
-    UIWindow             *_pickerHostWindow;     // dismissed after picker completes
+    AVSLocalDataProvider *_activeLocalProvider;
+    UIWindow             *_pickerHostWindow;
 }
 @synthesize _panelDragStart = _panelDragStart;
 
@@ -46,13 +44,12 @@ static NSString *const kTelegramSupport = @"https://t.me/lordvcam777";
 - (void)setupWindows {
     [self _createFloatingButton];
     [self _createPanelWindow];
-    [self _createMenuWindow];
     [self _createPreviewWindow];
     [self _createEyedropperWindow];
 }
 
 // -----------------------------------------------------------------------
-// Botão flutuante (shortcut)
+// Botão flutuante
 // -----------------------------------------------------------------------
 - (void)_createFloatingButton {
     UIWindowScene *scene = (UIWindowScene *)[UIApplication.sharedApplication.connectedScenes
@@ -72,10 +69,10 @@ static NSString *const kTelegramSupport = @"https://t.me/lordvcam777";
     self.floatingButton.layer.borderColor = [UIColor systemBlueColor].CGColor;
     [self.floatingButton setImage:[UIImage systemImageNamed:@"camera.fill"]
                          forState:UIControlStateNormal];
+    self.floatingButton.tintColor = [UIColor whiteColor];
     [self.floatingButton addTarget:self action:@selector(_togglePanel)
                forControlEvents:UIControlEventTouchUpInside];
 
-    // Drag para reposicionar
     UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc]
                                    initWithTarget:self action:@selector(_handleButtonDrag:)];
     [self.floatingButton addGestureRecognizer:pan];
@@ -92,7 +89,6 @@ static NSString *const kTelegramSupport = @"https://t.me/lordvcam777";
     frame.origin.x = _dragStartPoint.x + translation.x;
     frame.origin.y = _dragStartPoint.y + translation.y;
 
-    // Limita à tela
     CGRect screen = UIScreen.mainScreen.bounds;
     frame.origin.x = MAX(0, MIN(frame.origin.x, screen.size.width - kButtonSize));
     frame.origin.y = MAX(20, MIN(frame.origin.y, screen.size.height - kButtonSize - 20));
@@ -118,144 +114,169 @@ static NSString *const kTelegramSupport = @"https://t.me/lordvcam777";
     self.panelWindow.layer.cornerRadius = 16;
     self.panelWindow.clipsToBounds = YES;
 
-    // Blur de fundo
     UIBlurEffect *blur = [UIBlurEffect effectWithStyle:UIBlurEffectStyleDark];
     self.panelBlur = [[UIVisualEffectView alloc] initWithEffect:blur];
     self.panelBlur.frame = self.panelWindow.bounds;
     [self.panelWindow addSubview:self.panelBlur];
 
-    // Conteúdo
     [self _buildPanelContent];
 
-    // Drag para mover painel
     UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc]
                                    initWithTarget:self action:@selector(_handlePanelDrag:)];
     [self.panelWindow addGestureRecognizer:pan];
 }
 
+// -----------------------------------------------------------------------
+// Layout do painel — gallery-only
+// -----------------------------------------------------------------------
 - (void)_buildPanelContent {
-    UIView *content = self.panelBlur.contentView;
+    UIView *c = self.panelBlur.contentView;
+    CGFloat y = 0;
+    CGFloat w = kPanelWidth;
 
-    // Header: "LordVCAM v1.x"
+    // ---- Header ----
+    y = 12;
     UILabel *title = [UILabel new];
-    title.frame = CGRectMake(16, 12, kPanelWidth - 32, 24);
-    title.text = [NSString stringWithFormat:@"LordVCAM "];
+    title.frame = CGRectMake(kPad, y, w - kPad * 2, 24);
+    title.text = @"LordVCAM";
     title.textColor = [UIColor whiteColor];
-    title.font = [UIFont boldSystemFontOfSize:16];
-    [content addSubview:title];
+    title.font = [UIFont boldSystemFontOfSize:17];
+    [c addSubview:title];
 
-    // Linha divisória
-    UIView *div = [[UIView alloc] initWithFrame:CGRectMake(0, 44, kPanelWidth, 0.5)];
+    y = 42;
+    UIView *div = [[UIView alloc] initWithFrame:CGRectMake(0, y, w, 0.5)];
     div.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.2];
-    [content addSubview:div];
+    [c addSubview:div];
 
-    // Campo IP + botão conectar
-    self.ipField = [[UITextField alloc] initWithFrame:CGRectMake(16, 56, 180, 38)];
-    self.ipField.placeholder = kDefaultIP;
-    self.ipField.text = kDefaultIP;
-    self.ipField.borderStyle = UITextBorderStyleRoundedRect;
-    self.ipField.keyboardType = UIKeyboardTypeDecimalPad;
-    self.ipField.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.1];
-    self.ipField.textColor = [UIColor whiteColor];
-    self.ipField.delegate = self;
-    [content addSubview:self.ipField];
+    // ---- Source buttons: Gallery / Disable ----
+    y = 54;
+    CGFloat btnW = (w - kPad * 2 - 10) / 2;
 
-    self.connectButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    self.connectButton.frame = CGRectMake(204, 56, 100, 38);
-    [self.connectButton setTitle:@" Connect" forState:UIControlStateNormal];
-    [self.connectButton setImage:[UIImage systemImageNamed:@"bolt.fill"] forState:UIControlStateNormal];
-    self.connectButton.backgroundColor = [UIColor systemBlueColor];
-    self.connectButton.tintColor = [UIColor whiteColor];
-    self.connectButton.layer.cornerRadius = 8;
-    [self.connectButton addTarget:self action:@selector(_connectTapped)
+    self.galleryButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.galleryButton.frame = CGRectMake(kPad, y, btnW, 38);
+    [self.galleryButton setImage:[UIImage systemImageNamed:@"photo.on.rectangle"] forState:UIControlStateNormal];
+    [self.galleryButton setTitle:@" Gallery" forState:UIControlStateNormal];
+    self.galleryButton.tintColor = [UIColor whiteColor];
+    self.galleryButton.backgroundColor = [[UIColor systemBlueColor] colorWithAlphaComponent:0.6];
+    self.galleryButton.layer.cornerRadius = 10;
+    self.galleryButton.tag = 0;
+    [self.galleryButton addTarget:self action:@selector(_modeTapped:)
                  forControlEvents:UIControlEventTouchUpInside];
-    [content addSubview:self.connectButton];
+    [c addSubview:self.galleryButton];
 
-    // Stats label
+    UIButton *disableBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    disableBtn.frame = CGRectMake(kPad + btnW + 10, y, btnW, 38);
+    [disableBtn setImage:[UIImage systemImageNamed:@"nosign"] forState:UIControlStateNormal];
+    [disableBtn setTitle:@" Disable" forState:UIControlStateNormal];
+    disableBtn.tintColor = [UIColor whiteColor];
+    disableBtn.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.15];
+    disableBtn.layer.cornerRadius = 10;
+    disableBtn.tag = 1;
+    [disableBtn addTarget:self action:@selector(_modeTapped:)
+         forControlEvents:UIControlEventTouchUpInside];
+    [c addSubview:disableBtn];
+
+    // ---- Status ----
+    y = 102;
     self.statsLabel = [UILabel new];
-    self.statsLabel.frame = CGRectMake(16, 100, kPanelWidth - 32, 44);
-    self.statsLabel.text = @"Waiting for frames...";
-    self.statsLabel.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.7];
-    self.statsLabel.font = [UIFont monospacedSystemFontOfSize:10 weight:UIFontWeightRegular];
+    self.statsLabel.frame = CGRectMake(kPad, y, w - kPad * 2, 36);
+    self.statsLabel.text = @"Select a photo or video from Gallery.";
+    self.statsLabel.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.6];
+    self.statsLabel.font = [UIFont systemFontOfSize:12];
     self.statsLabel.numberOfLines = 2;
-    [content addSubview:self.statsLabel];
+    [c addSubview:self.statsLabel];
 
-    // Menu de modos (Stream / Gallery / Disable)
-    [self _buildModeMenu:content];
+    // ---- Divider ----
+    y = 142;
+    UIView *div2 = [[UIView alloc] initWithFrame:CGRectMake(kPad, y, w - kPad * 2, 0.5)];
+    div2.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.1];
+    [c addSubview:div2];
 
-    // Seção de controles de câmera
-    [self _buildCameraControls:content];
+    // ---- Camera controls: 2 rows x 3 ----
+    y = 154;
+    [self _buildCameraControls:c atY:y];
 
-    // Switch de replacement
-    [self _buildReplacementSwitch:content];
+    // ---- Pan arrows: cross layout ----
+    y = 256;
+    [self _buildPanControls:c atY:y];
 
-    // Switch de áudio
-    [self _buildAudioSwitch:content];
+    // ---- Divider ----
+    y = 362;
+    UIView *div3 = [[UIView alloc] initWithFrame:CGRectMake(kPad, y, w - kPad * 2, 0.5)];
+    div3.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.1];
+    [c addSubview:div3];
 
-    // Spinner de loading
+    // ---- Switches ----
+    y = 374;
+    [self _buildReplacementSwitch:c atY:y];
+    y = 416;
+    [self _buildAudioSwitch:c atY:y];
+
+    // ---- Spinner ----
     self.spinner = [[UIActivityIndicatorView alloc]
                     initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
-    self.spinner.center = CGPointMake(kPanelWidth / 2, kPanelHeight / 2);
+    self.spinner.center = CGPointMake(w / 2, kPanelHeight / 2);
     self.spinner.color = [UIColor whiteColor];
     self.spinner.hidden = YES;
-    [content addSubview:self.spinner];
+    [c addSubview:self.spinner];
 }
 
-- (void)_buildModeMenu:(UIView *)content {
-    // tag 0 = Gallery, tag 1 = Disable
-    NSArray *modes = @[
-        @[@"photo.on.rectangle", @" Gallery"],
-        @[@"nosign",             @" Disable"],
-    ];
+// -----------------------------------------------------------------------
+// Camera control grid: zoom, rotate, flip, reset
+// -----------------------------------------------------------------------
+- (void)_buildCameraControls:(UIView *)content atY:(CGFloat)baseY {
+    CGFloat btnSz = 44;
+    CGFloat gap   = 6;
+    // Center the 3-button row
+    CGFloat totalW = btnSz * 3 + gap * 2;
+    CGFloat startX = (kPanelWidth - totalW) / 2;
 
-    CGFloat x = 16;
-    for (NSArray *mode in modes) {
-        UIButton *btn = [UIButton buttonWithType:UIButtonTypeSystem];
-        btn.frame = CGRectMake(x, 152, 140, 36);
-        [btn setImage:[UIImage systemImageNamed:mode[0]] forState:UIControlStateNormal];
-        [btn setTitle:mode[1] forState:UIControlStateNormal];
-        btn.tintColor = [UIColor whiteColor];
-        btn.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.15];
-        btn.layer.cornerRadius = 8;
-        btn.tag = [modes indexOfObject:mode];
-        [btn addTarget:self action:@selector(_modeTapped:) forControlEvents:UIControlEventTouchUpInside];
-        [content addSubview:btn];
-        x += 148;
-    }
-}
-
-- (void)_buildCameraControls:(UIView *)content {
-    // Grade de botões: zoom, rotação, flip, pan
     struct { NSString *icon; SEL action; } btns[] = {
-        { @"plus.magnifyingglass",   @selector(zoomIn) },
-        { @"minus.magnifyingglass",  @selector(zoomOut) },
-        { @"rotate.right",           @selector(rotRight) },
-        { @"rotate.left",            @selector(rotLeft) },
+        { @"plus.magnifyingglass",   @selector(zoomIn)   },
+        { @"minus.magnifyingglass",  @selector(zoomOut)  },
+        { @"rotate.right",          @selector(rotRight)  },
+        { @"rotate.left",           @selector(rotLeft)   },
         { @"arrow.left.and.right.righttriangle.left.righttriangle.right", @selector(flipH) },
         { @"arrow.counterclockwise", @selector(_resetAll) },
     };
 
-    CGFloat x = 16;
-    CGFloat y = 200;
     for (int i = 0; i < 6; i++) {
+        int col = i % 3;
+        int row = i / 3;
+        CGFloat x = startX + col * (btnSz + gap);
+        CGFloat y = baseY + row * (btnSz + gap);
+
         UIButton *btn = [UIButton buttonWithType:UIButtonTypeSystem];
-        btn.frame = CGRectMake(x, y, 44, 44);
-        [btn setImage:[UIImage systemImageNamed:[NSString stringWithUTF8String:btns[i].icon.UTF8String]]
-             forState:UIControlStateNormal];
+        btn.frame = CGRectMake(x, y, btnSz, btnSz);
+        [btn setImage:[UIImage systemImageNamed:btns[i].icon] forState:UIControlStateNormal];
         btn.tintColor = [UIColor whiteColor];
-        btn.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.15];
-        btn.layer.cornerRadius = 8;
+        btn.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.12];
+        btn.layer.cornerRadius = 10;
         [btn addTarget:self action:btns[i].action forControlEvents:UIControlEventTouchUpInside];
         [content addSubview:btn];
-        x += 50;
-        if (i == 2) { x = 16; y += 52; }
     }
+}
 
-    // Pan: cima, baixo, esquerda, direita
-    self.panUpBtn    = [self _makeControlBtn:@"arrow.up"    action:@selector(panUp)    frame:CGRectMake(126, 196, 44, 44) parent:content];
-    self.panDownBtn  = [self _makeControlBtn:@"arrow.down"  action:@selector(panDown)  frame:CGRectMake(126, 248, 44, 44) parent:content];
-    self.panLeftBtn  = [self _makeControlBtn:@"arrow.left"  action:@selector(panLeft)  frame:CGRectMake( 76, 222, 44, 44) parent:content];
-    self.panRightBtn = [self _makeControlBtn:@"arrow.right" action:@selector(panRight) frame:CGRectMake(176, 222, 44, 44) parent:content];
+// -----------------------------------------------------------------------
+// Pan arrows in cross pattern
+// -----------------------------------------------------------------------
+- (void)_buildPanControls:(UIView *)content atY:(CGFloat)baseY {
+    CGFloat btnSz = 42;
+    CGFloat gap   = 4;
+    CGFloat cx    = kPanelWidth / 2; // center X
+
+    // Up
+    self.panUpBtn = [self _makeControlBtn:@"arrow.up" action:@selector(panUp)
+        frame:CGRectMake(cx - btnSz/2, baseY, btnSz, btnSz) parent:content];
+    // Left
+    self.panLeftBtn = [self _makeControlBtn:@"arrow.left" action:@selector(panLeft)
+        frame:CGRectMake(cx - btnSz - btnSz/2 - gap, baseY + btnSz + gap, btnSz, btnSz) parent:content];
+    // Right
+    self.panRightBtn = [self _makeControlBtn:@"arrow.right" action:@selector(panRight)
+        frame:CGRectMake(cx + btnSz/2 + gap, baseY + btnSz + gap, btnSz, btnSz) parent:content];
+    // Down
+    self.panDownBtn = [self _makeControlBtn:@"arrow.down" action:@selector(panDown)
+        frame:CGRectMake(cx - btnSz/2, baseY + (btnSz + gap) * 2, btnSz, btnSz) parent:content];
 }
 
 - (UIButton *)_makeControlBtn:(NSString *)icon action:(SEL)action
@@ -264,39 +285,42 @@ static NSString *const kTelegramSupport = @"https://t.me/lordvcam777";
     btn.frame = frame;
     [btn setImage:[UIImage systemImageNamed:icon] forState:UIControlStateNormal];
     btn.tintColor = [UIColor whiteColor];
-    btn.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.15];
-    btn.layer.cornerRadius = 8;
+    btn.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.12];
+    btn.layer.cornerRadius = 10;
     [btn addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
     [parent addSubview:btn];
     return btn;
 }
 
-- (void)_buildReplacementSwitch:(UIView *)content {
+// -----------------------------------------------------------------------
+// Switches
+// -----------------------------------------------------------------------
+- (void)_buildReplacementSwitch:(UIView *)content atY:(CGFloat)y {
     UILabel *lbl = [UILabel new];
-    lbl.frame = CGRectMake(16, 310, 180, 20);
+    lbl.frame = CGRectMake(kPad, y + 5, 180, 20);
     lbl.text = @"Enable Replacement";
     lbl.textColor = [UIColor whiteColor];
     lbl.font = [UIFont systemFontOfSize:14];
     [content addSubview:lbl];
 
     self._avs_cfg_rplSw = [[UISwitch alloc] init];
-    self._avs_cfg_rplSw.frame = CGRectMake(kPanelWidth - 70, 305, 51, 31);
+    self._avs_cfg_rplSw.frame = CGRectMake(kPanelWidth - 67, y, 51, 31);
     self._avs_cfg_rplSw.onTintColor = [UIColor systemBlueColor];
     [self._avs_cfg_rplSw addTarget:self action:@selector(_avs_cfg_rplChg:)
                   forControlEvents:UIControlEventValueChanged];
     [content addSubview:self._avs_cfg_rplSw];
 }
 
-- (void)_buildAudioSwitch:(UIView *)content {
+- (void)_buildAudioSwitch:(UIView *)content atY:(CGFloat)y {
     UILabel *lbl = [UILabel new];
-    lbl.frame = CGRectMake(16, 348, 180, 20);
+    lbl.frame = CGRectMake(kPad, y + 5, 180, 20);
     lbl.text = @"Audio Source";
     lbl.textColor = [UIColor whiteColor];
     lbl.font = [UIFont systemFontOfSize:14];
     [content addSubview:lbl];
 
     self._avs_cfg_aRplSw = [[UISwitch alloc] init];
-    self._avs_cfg_aRplSw.frame = CGRectMake(kPanelWidth - 70, 343, 51, 31);
+    self._avs_cfg_aRplSw.frame = CGRectMake(kPanelWidth - 67, y, 51, 31);
     self._avs_cfg_aRplSw.onTintColor = [UIColor systemGreenColor];
     [self._avs_cfg_aRplSw addTarget:self action:@selector(_avs_cfg_aRplChg:)
                    forControlEvents:UIControlEventValueChanged];
@@ -304,41 +328,9 @@ static NSString *const kTelegramSupport = @"https://t.me/lordvcam777";
 }
 
 // -----------------------------------------------------------------------
-// Menu dropdown (criado por setupWindows)
+// Ações
 // -----------------------------------------------------------------------
-- (void)_createMenuWindow {
-    UIWindowScene *scene = (UIWindowScene *)[UIApplication.sharedApplication.connectedScenes anyObject];
-    self.menuWindow = [[UIWindow alloc] initWithWindowScene:scene];
-    self.menuWindow.windowLevel = UIWindowLevelAlert + 90;
-    self.menuWindow.backgroundColor = [UIColor clearColor];
-    self.menuWindow.hidden = YES;
-
-    UIBlurEffect *blur = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark];
-    UIVisualEffectView *blurView = [[UIVisualEffectView alloc] initWithEffect:blur];
-    blurView.frame = self.menuWindow.bounds;
-    blurView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    blurView.layer.cornerRadius = 14;
-    blurView.clipsToBounds = YES;
-    [self.menuWindow addSubview:blurView];
-}
-
-// -----------------------------------------------------------------------
-// Ações dos botões de controle
-// -----------------------------------------------------------------------
-- (void)_loopBtnTapped {
-    // Toggle loop mode on the active data source
-    NSLog(@"[avsd] Loop toggle");
-}
-
-- (void)_connectTapped {
-    NSString *ip = self.ipField.text;
-    if (!ip || ip.length == 0) ip = kDefaultIP;
-    // Notifica coordinator
-    NSLog(@"[avsd] Connecting to %@", ip);
-}
-
 - (void)_modeTapped:(UIButton *)btn {
-    // tag 0 = Gallery, tag 1 = Disable
     int mode = (int)btn.tag;
     self.activeBgButton = btn;
 
@@ -347,6 +339,7 @@ static NSString *const kTelegramSupport = @"https://t.me/lordvcam777";
     } else if (mode == 1) {
         [self.coordinator enableReplacement:NO];
         self._avs_cfg_rplSw.on = NO;
+        self.statsLabel.text = @"Disabled. Select Gallery to pick media.";
     }
 }
 
@@ -354,8 +347,6 @@ static NSString *const kTelegramSupport = @"https://t.me/lordvcam777";
     AVSLocalDataProvider *provider = [[AVSLocalDataProvider alloc] init];
     _activeLocalProvider = provider;
 
-    // Wire the coordinator before the picker opens so frames start flowing
-    // as soon as the user picks media — no second tap needed.
     [self.coordinator setDataSource:provider];
 
     PHPickerConfiguration *config = [[PHPickerConfiguration alloc]
@@ -369,7 +360,6 @@ static NSString *const kTelegramSupport = @"https://t.me/lordvcam777";
     PHPickerViewController *picker = [[PHPickerViewController alloc] initWithConfiguration:config];
     picker.delegate = self;
 
-    // SpringBoard has no root view controller; create a host window to present from.
     UIWindowScene *scene = (UIWindowScene *)[UIApplication.sharedApplication.connectedScenes anyObject];
     _pickerHostWindow = [[UIWindow alloc] initWithWindowScene:scene];
     _pickerHostWindow.windowLevel = UIWindowLevelAlert + 150;
@@ -399,34 +389,33 @@ didFinishPicking:(NSArray<PHPickerResult *> *)results {
     NSItemProvider *itemProvider = result.itemProvider;
 
     if ([itemProvider hasItemConformingToTypeIdentifier:@"public.movie"]) {
+        self.statsLabel.text = @"Loading video...";
         [itemProvider loadFileRepresentationForTypeIdentifier:@"public.movie"
                                            completionHandler:^(NSURL *url, NSError *err) {
             if (!url) return;
-            // loadFileRepresentation gives a temporary URL valid only during the callback;
-            // copy to a stable tmp path before returning to the main queue.
             NSURL *tmpURL = [[NSURL fileURLWithPath:NSTemporaryDirectory()]
                              URLByAppendingPathComponent:url.lastPathComponent];
             [[NSFileManager defaultManager] copyItemAtURL:url toURL:tmpURL error:nil];
             dispatch_async(dispatch_get_main_queue(), ^{
                 [self->_activeLocalProvider _avs_dat_loadVid:tmpURL];
                 [self.coordinator enableReplacement:YES];
+                self._avs_cfg_rplSw.on = YES;
+                self.statsLabel.text = @"Video loaded. Replacement active.";
             });
         }];
     } else if ([itemProvider hasItemConformingToTypeIdentifier:@"public.image"]) {
+        self.statsLabel.text = @"Loading image...";
         [itemProvider loadFileRepresentationForTypeIdentifier:@"public.image"
                                            completionHandler:^(NSURL *url, NSError *err) {
             if (!url) return;
             dispatch_async(dispatch_get_main_queue(), ^{
                 [self->_activeLocalProvider _avs_dat_loadImg:url];
                 [self.coordinator enableReplacement:YES];
+                self._avs_cfg_rplSw.on = YES;
+                self.statsLabel.text = @"Image loaded. Replacement active.";
             });
         }];
     }
-}
-
-- (void)_usbTapped {
-    // Conecta via USB (127.0.0.1:8765)
-    NSLog(@"[avsd] USB mode: 127.0.0.1:8765");
 }
 
 - (void)zoomIn    { [self.coordinator.renderPipeline zoomIn];        }
@@ -451,7 +440,7 @@ didFinishPicking:(NSArray<PHPickerResult *> *)results {
 }
 
 // -----------------------------------------------------------------------
-// Exibir / ocultar painel
+// Toggle painel
 // -----------------------------------------------------------------------
 - (void)_togglePanel {
     if (_panelVisible) {
@@ -465,7 +454,7 @@ didFinishPicking:(NSArray<PHPickerResult *> *)results {
     _panelVisible = YES;
     self.panelWindow.hidden = NO;
     self.panelWindow.alpha = 0;
-    [UIView animateWithDuration:0.2 animations:^{
+    [UIView animateWithDuration:0.25 animations:^{
         self.panelWindow.alpha = 1.0;
     }];
 }
@@ -480,16 +469,7 @@ didFinishPicking:(NSArray<PHPickerResult *> *)results {
 }
 
 - (void)_avs_ov_updIcon {
-    // Atualiza ícone do botão flutuante baseado no estado
-    NSString *iconName = @"camera.fill";
-
-    // Indicadores de estado no ícone (de __cstring: "icon", "wifi", "color")
-    if (self._avs_cfg_rplSw.isOn) {
-        iconName = @"camera.fill";
-    } else {
-        iconName = @"nosign";
-    }
-
+    NSString *iconName = self._avs_cfg_rplSw.isOn ? @"camera.fill" : @"nosign";
     [self.floatingButton setImage:[UIImage systemImageNamed:iconName]
                          forState:UIControlStateNormal];
 }
@@ -519,12 +499,15 @@ didFinishPicking:(NSArray<PHPickerResult *> *)results {
 }
 
 - (void)switchToFilters {
-    _menuMode = 1; // Filtros
-    NSLog(@"[avsd] Switch to Filters");
+    _menuMode = 1;
+}
+
+- (void)_loopBtnTapped {
+    NSLog(@"[avsd] Loop toggle");
 }
 
 // -----------------------------------------------------------------------
-// Mover painel via drag
+// Drag painel
 // -----------------------------------------------------------------------
 - (void)_handlePanelDrag:(UIPanGestureRecognizer *)gr {
     CGPoint translation = [gr translationInView:self.panelWindow];
@@ -560,7 +543,7 @@ didFinishPicking:(NSArray<PHPickerResult *> *)results {
 }
 
 // -----------------------------------------------------------------------
-// Eyedropper window
+// Eyedropper
 // -----------------------------------------------------------------------
 - (void)_createEyedropperWindow {
     UIWindowScene *scene = (UIWindowScene *)[UIApplication.sharedApplication.connectedScenes
@@ -578,10 +561,9 @@ didFinishPicking:(NSArray<PHPickerResult *> *)results {
 }
 
 // -----------------------------------------------------------------------
-// Notificações / Banners
+// Banners
 // -----------------------------------------------------------------------
 - (void)_avs_pres_buildNote:(id)config title:(NSString *)title body:(NSString *)body {
-    // Cria banner de notificação sobre outras janelas
     UIWindowScene *scene = (UIWindowScene *)[UIApplication.sharedApplication.connectedScenes
                                              anyObject];
     self._avs_cfg_bannerWin = [[UIWindow alloc] initWithWindowScene:scene];
@@ -615,7 +597,6 @@ didFinishPicking:(NSArray<PHPickerResult *> *)results {
 
     self._avs_cfg_bannerWin.hidden = NO;
 
-    // Auto-dismiss após 4s
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 4 * NSEC_PER_SEC),
                    dispatch_get_main_queue(), ^{
         [UIView animateWithDuration:0.3 animations:^{
@@ -628,44 +609,21 @@ didFinishPicking:(NSArray<PHPickerResult *> *)results {
 }
 
 - (void)_avs_pres_showMnt:(NSString *)message estimatedEnd:(NSString *)eta {
-    // Mostra tela de manutenção
-    // "Scheduled Downtime — Service temporarily unavailable."
-    // "ESTIMATED END: %@ (GMT-3)"
-    // "Active subscriptions receive time credit for the downtime period."
     NSLog(@"[avsd] Maintenance: %@ ETA: %@", message, eta);
 }
 
-// -----------------------------------------------------------------------
-// Atualização de estado de conexão na UI
-// -----------------------------------------------------------------------
 - (void)_avs_pp_updConn {
-    BOOL connected = self._avs_cfg_connSt != nil &&
-                     [self._avs_cfg_connSt isEqualToString:@"connected"];
-
-    if (connected) {
-        [self.connectButton setTitle:@" Disconnect" forState:UIControlStateNormal];
-        [self.connectButton setImage:[UIImage systemImageNamed:@"bolt.slash.fill"]
-                            forState:UIControlStateNormal];
-        self.connectButton.backgroundColor = [UIColor systemRedColor];
-    } else {
-        [self.connectButton setTitle:@" Connect" forState:UIControlStateNormal];
-        [self.connectButton setImage:[UIImage systemImageNamed:@"bolt.fill"]
-                            forState:UIControlStateNormal];
-        self.connectButton.backgroundColor = [UIColor systemBlueColor];
-    }
+    // No-op for gallery-only mode
 }
 
 // -----------------------------------------------------------------------
-// UITextFieldDelegate
+// Delegates
 // -----------------------------------------------------------------------
 - (BOOL)textFieldShouldReturn:(UITextField *)textField {
     [textField resignFirstResponder];
     return YES;
 }
 
-// -----------------------------------------------------------------------
-// UIGestureRecognizerDelegate
-// -----------------------------------------------------------------------
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gr
 shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)other {
     return YES;

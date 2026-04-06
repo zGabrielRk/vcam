@@ -333,58 +333,77 @@ static void AVSFrameCoordinator_setup_mediaserverd(void) {
 
 // -----------------------------------------------------------------------
 // Hook de Volume: Volume+ e Volume- simultâneos → toggle do painel
-// Baseado nos seletores do binário original:
-//   increaseVolume / decreaseVolume (SpringBoard)
+// iOS 15+ usa SBVolumeControl em vez de SpringBoard para volume
 // -----------------------------------------------------------------------
 static double gVolUpTime  = 0;
 static double gVolDownTime = 0;
-static const double kVolumeComboWindow = 0.4; // segundos para considerar combo
+static const double kVolumeComboWindow = 0.5;
 
-static void (*orig_increaseVolume)(id, SEL);
-static void (*orig_decreaseVolume)(id, SEL);
+static void (*orig_volUp)(id, SEL);
+static void (*orig_volDown)(id, SEL);
 
-static void hook_increaseVolume(id self, SEL _cmd) {
+static void _avs_checkVolumeCombo(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (gPanel) [gPanel _togglePanel];
+    });
+}
+
+static void hook_volUp(id self, SEL _cmd) {
     gVolUpTime = CACurrentMediaTime();
     if ((gVolUpTime - gVolDownTime) < kVolumeComboWindow && gVolDownTime > 0) {
         gVolUpTime = 0;
         gVolDownTime = 0;
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (gPanel) [gPanel _togglePanel];
-        });
+        _avs_checkVolumeCombo();
         return;
     }
-    orig_increaseVolume(self, _cmd);
+    orig_volUp(self, _cmd);
 }
 
-static void hook_decreaseVolume(id self, SEL _cmd) {
+static void hook_volDown(id self, SEL _cmd) {
     gVolDownTime = CACurrentMediaTime();
     if ((gVolDownTime - gVolUpTime) < kVolumeComboWindow && gVolUpTime > 0) {
         gVolUpTime = 0;
         gVolDownTime = 0;
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (gPanel) [gPanel _togglePanel];
-        });
+        _avs_checkVolumeCombo();
         return;
     }
-    orig_decreaseVolume(self, _cmd);
+    orig_volDown(self, _cmd);
+}
+
+static BOOL _avs_tryHookVolume(Class cls, NSString *upSel, NSString *downSel) {
+    if (!cls) return NO;
+    if (![cls instancesRespondToSelector:NSSelectorFromString(upSel)]) return NO;
+    if (![cls instancesRespondToSelector:NSSelectorFromString(downSel)]) return NO;
+
+    MSHookMessageEx(cls,
+                    NSSelectorFromString(upSel),
+                    (IMP)hook_volUp,
+                    (IMP *)&orig_volUp);
+    MSHookMessageEx(cls,
+                    NSSelectorFromString(downSel),
+                    (IMP)hook_volDown,
+                    (IMP *)&orig_volDown);
+    NSLog(@"[avsd-KYC] Volume combo hooked on %@ (%@ / %@)",
+          NSStringFromClass(cls), upSel, downSel);
+    return YES;
 }
 
 // -----------------------------------------------------------------------
 // Setup para SpringBoard (UI flutuante)
 // -----------------------------------------------------------------------
 static void AVSFrameCoordinator_setup_springboard(void) {
-    // Hook Volume+/- no SpringBoard para combo de atalho
-    Class springBoardClass = NSClassFromString(@"SpringBoard");
-    if (springBoardClass) {
-        MSHookMessageEx(springBoardClass,
-                        NSSelectorFromString(@"increaseVolume"),
-                        (IMP)hook_increaseVolume,
-                        (IMP *)&orig_increaseVolume);
-        MSHookMessageEx(springBoardClass,
-                        NSSelectorFromString(@"decreaseVolume"),
-                        (IMP)hook_decreaseVolume,
-                        (IMP *)&orig_decreaseVolume);
-        NSLog(@"[avsd-KYC] Volume combo hook installed");
+    // Hook volume buttons — try multiple classes for iOS version compat
+    BOOL hooked =
+        _avs_tryHookVolume(NSClassFromString(@"SBVolumeControl"),
+                           @"increaseVolume", @"decreaseVolume") ||
+        _avs_tryHookVolume(NSClassFromString(@"VolumeControl"),
+                           @"increaseVolume", @"decreaseVolume") ||
+        _avs_tryHookVolume(NSClassFromString(@"SpringBoard"),
+                           @"increaseVolume", @"decreaseVolume") ||
+        _avs_tryHookVolume(NSClassFromString(@"SpringBoard"),
+                           @"handleVolumeUpButtonPress", @"handleVolumeDownButtonPress");
+    if (!hooked) {
+        NSLog(@"[avsd-KYC] WARNING: Could not hook volume buttons on any known class");
     }
 
     // Observa UIApplicationDidFinishLaunchingNotification (nome completo com sufixo)
