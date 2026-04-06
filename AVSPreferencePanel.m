@@ -344,7 +344,7 @@ static CGFloat const kPad          = 16.0f;
 }
 
 - (void)_openGalleryPicker {
-    NSLog(@"[avsd-UI] Opening gallery picker, coordinator=%p", self.coordinator);
+    AVSLogWrite(@"[avsd-UI] Opening gallery picker, coordinator=%p", self.coordinator);
     AVSLocalDataProvider *provider = [[AVSLocalDataProvider alloc] init];
     _activeLocalProvider = provider;
 
@@ -396,13 +396,13 @@ didFinishPicking:(NSArray<PHPickerResult *> *)results {
                              URLByAppendingPathComponent:url.lastPathComponent];
             [[NSFileManager defaultManager] copyItemAtURL:url toURL:tmpURL error:nil];
             dispatch_async(dispatch_get_main_queue(), ^{
-                NSLog(@"[avsd-UI] Loading video: %@", tmpURL.path);
+                AVSLogWrite(@"[avsd-UI] Loading video: %@", tmpURL.path);
                 [self.coordinator setDataSource:self->_activeLocalProvider];
                 [self->_activeLocalProvider _avs_dat_loadVid:tmpURL];
                 [self.coordinator enableReplacement:YES];
                 self._avs_cfg_rplSw.on = YES;
                 self.statsLabel.text = @"Video loaded. Replacement active.";
-                NSLog(@"[avsd-UI] Video setup complete. replOn=%d feedOn=%d",
+                AVSLogWrite(@"[avsd-UI] Video setup complete. replOn=%d feedOn=%d",
                       self.coordinator._avs_cfg_replOn, self.coordinator._avs_cfg_feedOn);
             });
         }];
@@ -412,13 +412,13 @@ didFinishPicking:(NSArray<PHPickerResult *> *)results {
                                            completionHandler:^(NSURL *url, NSError *err) {
             if (!url) return;
             dispatch_async(dispatch_get_main_queue(), ^{
-                NSLog(@"[avsd-UI] Loading image: %@", url.path);
+                AVSLogWrite(@"[avsd-UI] Loading image: %@", url.path);
                 [self.coordinator setDataSource:self->_activeLocalProvider];
                 [self->_activeLocalProvider _avs_dat_loadImg:url];
                 [self.coordinator enableReplacement:YES];
                 self._avs_cfg_rplSw.on = YES;
                 self.statsLabel.text = @"Image loaded. Replacement active.";
-                NSLog(@"[avsd-UI] Image setup complete. replOn=%d feedOn=%d",
+                AVSLogWrite(@"[avsd-UI] Image setup complete. replOn=%d feedOn=%d",
                       self.coordinator._avs_cfg_replOn, self.coordinator._avs_cfg_feedOn);
             });
         }];
@@ -510,7 +510,7 @@ didFinishPicking:(NSArray<PHPickerResult *> *)results {
 }
 
 - (void)_loopBtnTapped {
-    NSLog(@"[avsd] Loop toggle");
+    AVSLogWrite(@"[avsd] Loop toggle");
 }
 
 // -----------------------------------------------------------------------
@@ -616,7 +616,7 @@ didFinishPicking:(NSArray<PHPickerResult *> *)results {
 }
 
 - (void)_avs_pres_showMnt:(NSString *)message estimatedEnd:(NSString *)eta {
-    NSLog(@"[avsd] Maintenance: %@ ETA: %@", message, eta);
+    AVSLogWrite(@"[avsd] Maintenance: %@ ETA: %@", message, eta);
 }
 
 - (void)_avs_pp_updConn {

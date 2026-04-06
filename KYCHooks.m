@@ -21,6 +21,38 @@
 #import "AVSWSProtocol.h"
 #import "AVSIPCTransport.h"
 
+// -----------------------------------------------------------------------
+// File-based logging — immune to iOS syslog filtering
+// Writes to /var/tmp/com.apple.avfcache/avsd.log
+// -----------------------------------------------------------------------
+static NSString *const kAVSLogPath = @"/var/tmp/com.apple.avfcache/avsd.log";
+static NSLock *gLogLock = nil;
+
+void AVSLogWrite(NSString *format, ...) {
+    va_list args;
+    va_start(args, format);
+    NSString *msg = [[NSString alloc] initWithFormat:format arguments:args];
+    va_end(args);
+
+    NSString *ts = [NSString stringWithFormat:@"%.3f", CACurrentMediaTime()];
+    NSString *line = [NSString stringWithFormat:@"[%@] %@\n", ts, msg];
+
+    if (!gLogLock) gLogLock = [[NSLock alloc] init];
+    [gLogLock lock];
+    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:kAVSLogPath];
+    if (!fh) {
+        [@"" writeToFile:kAVSLogPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        fh = [NSFileHandle fileHandleForWritingAtPath:kAVSLogPath];
+    }
+    [fh seekToEndOfFile];
+    [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
+    [fh closeFile];
+    [gLogLock unlock];
+
+    // Also NSLog for good measure
+    NSLog(@"%@", msg);
+}
+
 // Singleton global do coordinator
 static AVSFrameCoordinator *gCoordinator = nil;
 static AVSPreferencePanel  *gPanel       = nil;
@@ -123,7 +155,7 @@ static void avs_setup_crash_handler(void) {
 // BWNodeOutput é o nó de saída do grafo de captura em mediaserverd
 // -----------------------------------------------------------------------
 static void hook_BWNodeOutput_dealloc(id self, SEL _cmd) {
-    NSLog(@"[avsd] BWNodeOutput dealloc");
+    AVSLogWrite(@"[avsd] BWNodeOutput dealloc");
     orig_BWNodeOutput_dealloc(self, _cmd);
 }
 
@@ -136,7 +168,7 @@ static CMSampleBufferRef hook_BWNodeOutput_copyNextSampleBuffer(id self, SEL _cm
     _hookCallCount++;
     // Log every 60 frames (~2s at 30fps) so syslog isn't flooded
     if (_hookCallCount % 60 == 1) {
-        NSLog(@"[avsd-HOOK] copyNextSampleBuffer #%d coord=%p replOn=%d feedOn=%d lastPB=%p",
+        AVSLogWrite(@"[avsd-HOOK] copyNextSampleBuffer #%d coord=%p replOn=%d feedOn=%d lastPB=%p",
               _hookCallCount, gCoordinator,
               gCoordinator ? gCoordinator._avs_cfg_replOn : -1,
               gCoordinator ? gCoordinator._avs_cfg_feedOn : -1,
@@ -149,7 +181,7 @@ static CMSampleBufferRef hook_BWNodeOutput_copyNextSampleBuffer(id self, SEL _cm
     if (replacement == orig) return orig;
 
     if (_hookCallCount % 60 == 1) {
-        NSLog(@"[avsd-HOOK] INJECTED replacement frame #%d", _hookCallCount);
+        AVSLogWrite(@"[avsd-HOOK] INJECTED replacement frame #%d", _hookCallCount);
     }
     if (orig) CFRelease(orig);
     return replacement; // já retido por injectReplacementForFrame:
@@ -173,7 +205,7 @@ static CMSampleBufferRef hook_BWNodeOutput_copyNextSampleBuffer(id self, SEL _cm
 // -----------------------------------------------------------------------
 static id hook_FigCaptureClientSessionMonitor_init(id self, SEL _cmd) {
     id result = orig_sessionMonitorInit(self, _cmd);
-    NSLog(@"[avsd-KYC] KYCSession initialized (FigCaptureClientSessionMonitor)");
+    AVSLogWrite(@"[avsd-KYC] KYCSession initialized (FigCaptureClientSessionMonitor)");
     return result;
 }
 
@@ -208,7 +240,7 @@ static void handleApplicationLaunched(CFNotificationCenterRef center,
         gPanel  = [[AVSPreferencePanel alloc] init];
         gPanel.coordinator = gCoordinator;
         [gPanel setupWindows];
-        NSLog(@"[avsd] SpringBoard UI initialized (IPC producer)");
+        AVSLogWrite(@"[avsd] SpringBoard UI initialized (IPC producer)");
     });
 }
 
@@ -242,7 +274,7 @@ static void avs_write_probe(NSString *processName) {
     [probe appendFormat:@"timestamp: %f\n", CACurrentMediaTime()];
 
     [probe writeToFile:probePath atomically:YES encoding:NSUTF8StringEncoding error:nil];
-    NSLog(@"[avsd] [PROBE] %@", probePath);
+    AVSLogWrite(@"[avsd] [PROBE] %@", probePath);
 }
 
 // -----------------------------------------------------------------------
@@ -258,7 +290,7 @@ __attribute__((constructor))
 static void avs_ctor(void) {
     @autoreleasepool {
         NSString *processName = [NSProcessInfo processInfo].processName;
-        NSLog(@"[avsd-KYC] ctor starting in %@", processName);
+        AVSLogWrite(@"[avsd-KYC] ctor starting in %@", processName);
 
         // Garante diretório de cache
         [[NSFileManager defaultManager]
@@ -292,13 +324,13 @@ static void AVSFrameCoordinator_setup_mediaserverd(void) {
         "/System/Library/PrivateFrameworks/CMCapture.framework/CMCapture", RTLD_LAZY);
     void *frontBoard = dlopen(
         "/System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices", RTLD_LAZY);
-    NSLog(@"[avsd-KYC] dlopen complete");
+    AVSLogWrite(@"[avsd-KYC] dlopen complete");
     (void)cmCaptureCore; (void)cmCapture; (void)frontBoard;
 
     // Inicializa coordinator global + IPC consumer
     gCoordinator = [[AVSFrameCoordinator alloc] init];
     [gCoordinator configureIPCAsConsumer];
-    NSLog(@"[avsd-KYC] KYCCore initialized (IPC consumer)");
+    AVSLogWrite(@"[avsd-KYC] KYCCore initialized (IPC consumer)");
 
     // Hook BWNodeOutput
     Class bwNodeOutputClass = NSClassFromString(@"BWNodeOutput");
@@ -313,7 +345,7 @@ static void AVSFrameCoordinator_setup_mediaserverd(void) {
                         copyNextSel,
                         (IMP)hook_BWNodeOutput_copyNextSampleBuffer,
                         (IMP *)&orig_BWNodeOutput_copyNextSampleBuffer);
-        NSLog(@"[avsd-KYC] KYCMetadata initialized");
+        AVSLogWrite(@"[avsd-KYC] KYCMetadata initialized");
     }
 
     // Hook FigCaptureClientSessionMonitor
@@ -323,7 +355,7 @@ static void AVSFrameCoordinator_setup_mediaserverd(void) {
                         @selector(init),
                         (IMP)hook_FigCaptureClientSessionMonitor_init,
                         (IMP *)&orig_sessionMonitorInit);
-        NSLog(@"[avsd-KYC] KYCSession initialized (FigCaptureClientSessionMonitor)");
+        AVSLogWrite(@"[avsd-KYC] KYCSession initialized (FigCaptureClientSessionMonitor)");
     }
 
     // Hook BWStillImageScalerNode + BWPhotoEncoderNode para fotos
@@ -334,17 +366,17 @@ static void AVSFrameCoordinator_setup_mediaserverd(void) {
         MSHookMessageEx(photoEncoderClass, addAuxSel,
                         (IMP)hook_addAuxImages,
                         (IMP *)&orig_addAuxImages);
-        NSLog(@"[avsd-KYC] KYCPhoto initialized");
-        NSLog(@"[avsd-KYC] KYCPhotoEncoder initialized (A11+)");
+        AVSLogWrite(@"[avsd-KYC] KYCPhoto initialized");
+        AVSLogWrite(@"[avsd-KYC] KYCPhotoEncoder initialized (A11+)");
     }
 
     // Hook orientação via FBSOrientationUpdate
     Class fbsOrientClass = NSClassFromString(@"FBSOrientationUpdate");
     if (fbsOrientClass) {
-        NSLog(@"[avsd-KYC] KYCOrientation initialized (FBSOrientationUpdate)");
+        AVSLogWrite(@"[avsd-KYC] KYCOrientation initialized (FBSOrientationUpdate)");
     }
 
-    NSLog(@"[avsd-KYC] init complete");
+    AVSLogWrite(@"[avsd-KYC] init complete");
 }
 
 // -----------------------------------------------------------------------
@@ -399,7 +431,7 @@ static BOOL _avs_tryHookVolume(Class cls, NSString *upSel, NSString *downSel) {
                     NSSelectorFromString(downSel),
                     (IMP)hook_volDown,
                     (IMP *)&orig_volDown);
-    NSLog(@"[avsd-KYC] Volume combo hooked on %@ (%@ / %@)",
+    AVSLogWrite(@"[avsd-KYC] Volume combo hooked on %@ (%@ / %@)",
           NSStringFromClass(cls), upSel, downSel);
     return YES;
 }
@@ -419,7 +451,7 @@ static void AVSFrameCoordinator_setup_springboard(void) {
         _avs_tryHookVolume(NSClassFromString(@"SpringBoard"),
                            @"handleVolumeUpButtonPress", @"handleVolumeDownButtonPress");
     if (!hooked) {
-        NSLog(@"[avsd-KYC] WARNING: Could not hook volume buttons on any known class");
+        AVSLogWrite(@"[avsd-KYC] WARNING: Could not hook volume buttons on any known class");
     }
 
     // Observa UIApplicationDidFinishLaunchingNotification (nome completo com sufixo)
@@ -438,7 +470,7 @@ static void AVSFrameCoordinator_setup_springboard(void) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
         if (!gPanel && [UIApplication sharedApplication] != nil) {
-            NSLog(@"[avsd] SpringBoard already launched, initializing UI via fallback");
+            AVSLogWrite(@"[avsd] SpringBoard already launched, initializing UI via fallback");
             handleApplicationLaunched(NULL, NULL, NULL, NULL, NULL);
         }
     });

@@ -41,7 +41,7 @@
 // Carrega uma URL de vídeo (public.movie) ou imagem (public.image)
 // -----------------------------------------------------------------------
 - (void)_avs_dat_loadVid:(NSURL *)url {
-    NSLog(@"[avsd-DATA] _avs_dat_loadVid: %@", url.path);
+    AVSLogWrite(@"[avsd-DATA] _avs_dat_loadVid: %@", url.path);
     [self _avs_dat_stop];
     self.isVideo = YES;
 
@@ -53,7 +53,7 @@
     NSError *error = nil;
     self.assetReader = [AVAssetReader assetReaderWithAsset:asset error:&error];
     if (error) {
-        NSLog(@"[avsd] AVAssetReader error: %@", error);
+        AVSLogWrite(@"[avsd] AVAssetReader error: %@", error);
         return;
     }
 
@@ -95,7 +95,7 @@
     }
 
     if (![self.assetReader startReading]) {
-        NSLog(@"[avsd] AVAssetReader startReading failed: %@", self.assetReader.error);
+        AVSLogWrite(@"[avsd] AVAssetReader startReading failed: %@", self.assetReader.error);
         return;
     }
 
@@ -104,7 +104,7 @@
 }
 
 - (void)_avs_dat_loadImg:(NSURL *)url {
-    NSLog(@"[avsd-DATA] _avs_dat_loadImg: %@", url.path);
+    AVSLogWrite(@"[avsd-DATA] _avs_dat_loadImg: %@", url.path);
     [self _avs_dat_stop];
     self.isVideo = NO;
 
@@ -149,7 +149,7 @@
 
     // Check IOSurface backing
     IOSurfaceRef ioSurf = CVPixelBufferGetIOSurface(pixelBuf);
-    NSLog(@"[avsd-DATA] Image pixelBuffer created %zux%zu IOSurface=%p cb=%p",
+    AVSLogWrite(@"[avsd-DATA] Image pixelBuffer created %zux%zu IOSurface=%p cb=%p",
           w, h, ioSurf, self._avs_cfg_onDec);
 
     self.isReady = YES;
@@ -245,11 +245,11 @@ static int _popBufCount = 0;
         if (!sampleBuf) return;
         if (self._avs_cfg_onDec) {
             if (_popBufCount % 60 == 1) {
-                NSLog(@"[avsd-DATA] #%d delivering image frame cb=%p", _popBufCount, self._avs_cfg_onDec);
+                AVSLogWrite(@"[avsd-DATA] #%d delivering image frame cb=%p", _popBufCount, self._avs_cfg_onDec);
             }
             self._avs_cfg_onDec(sampleBuf);
         } else if (_popBufCount % 60 == 1) {
-            NSLog(@"[avsd-DATA] #%d WARNING: _avs_cfg_onDec is NULL, frame dropped", _popBufCount);
+            AVSLogWrite(@"[avsd-DATA] #%d WARNING: _avs_cfg_onDec is NULL, frame dropped", _popBufCount);
         }
         CFRelease(sampleBuf);
         return;
@@ -276,11 +276,11 @@ static int _popBufCount = 0;
     // Entrega frame ao coordinator via callback registrado em setDataSource:
     if (self._avs_cfg_onDec) {
         if (_popBufCount % 60 == 1) {
-            NSLog(@"[avsd-DATA] #%d delivering video frame #%d", _popBufCount, _framesAdvanced);
+            AVSLogWrite(@"[avsd-DATA] #%d delivering video frame #%d", _popBufCount, _framesAdvanced);
         }
         self._avs_cfg_onDec(sampleBuf);
     } else if (_popBufCount % 60 == 1) {
-        NSLog(@"[avsd-DATA] #%d WARNING: _avs_cfg_onDec is NULL for video frame", _popBufCount);
+        AVSLogWrite(@"[avsd-DATA] #%d WARNING: _avs_cfg_onDec is NULL for video frame", _popBufCount);
     }
     CFRelease(sampleBuf);
 }

@@ -159,7 +159,7 @@ static int _injectLogCount = 0;
     // Direct ivar reads: fast-exit guards on camera hook hot path (every frame)
     if (!_avs_cfg_replOn || !_avs_cfg_feedOn) {
         if (_injectLogCount % 60 == 1) {
-            NSLog(@"[avsd-INJECT] #%d SKIP: replOn=%d feedOn=%d",
+            AVSLogWrite(@"[avsd-INJECT] #%d SKIP: replOn=%d feedOn=%d",
                   _injectLogCount, _avs_cfg_replOn, _avs_cfg_feedOn);
         }
         return original;
@@ -172,7 +172,7 @@ static int _injectLogCount = 0;
 
     if (!replacement) {
         if (_injectLogCount % 60 == 1) {
-            NSLog(@"[avsd-INJECT] #%d SKIP: lastPB is NULL", _injectLogCount);
+            AVSLogWrite(@"[avsd-INJECT] #%d SKIP: lastPB is NULL", _injectLogCount);
         }
         return original;
     }
@@ -183,7 +183,7 @@ static int _injectLogCount = 0;
     if (ageMs > kStaleFrameThresholdMs && _avs_cfg_stallRec) {
         _avs_cfg_frmSkip++;
         if (_injectLogCount % 60 == 1) {
-            NSLog(@"[avsd-INJECT] #%d SKIP STALE: age=%.0fms > %.0fms",
+            AVSLogWrite(@"[avsd-INJECT] #%d SKIP STALE: age=%.0fms > %.0fms",
                   _injectLogCount, ageMs, kStaleFrameThresholdMs);
         }
         CFRelease(replacement);
@@ -191,7 +191,7 @@ static int _injectLogCount = 0;
     }
 
     if (_injectLogCount % 60 == 1) {
-        NSLog(@"[avsd-INJECT] #%d REPLACED age=%.0fms", _injectLogCount, ageMs);
+        AVSLogWrite(@"[avsd-INJECT] #%d REPLACED age=%.0fms", _injectLogCount, ageMs);
     }
     _avs_cfg_frmDlvr++;
     return replacement; // caller deve CFRelease o original se substituir
@@ -205,7 +205,7 @@ static int _decodeLogCount = 0;
     if (!frame) return;
     _decodeLogCount++;
     if (_decodeLogCount % 60 == 1) {
-        NSLog(@"[avsd-DECODE] #%d frame received, ipcSender=%p ipcReceiver=%p",
+        AVSLogWrite(@"[avsd-DECODE] #%d frame received, ipcSender=%p ipcReceiver=%p",
               _decodeLogCount, _ipcSender, _ipcReceiver);
     }
 
@@ -318,14 +318,14 @@ static int _decodeLogCount = 0;
             ((AVSLocalDataProvider *)source)._avs_cfg_onDec = ^(CMSampleBufferRef frame) {
                 [ws _onFrameDecoded:frame];
             };
-            NSLog(@"[avsd] DataSource callback registered on AVSLocalDataProvider, ipcSender=%p", _ipcSender);
+            AVSLogWrite(@"[avsd] DataSource callback registered on AVSLocalDataProvider, ipcSender=%p", _ipcSender);
         }
         [source _avs_dat_resume];
         self._avs_cfg_feedOn = YES;
-        NSLog(@"[avsd] Source set: %@ feedOn=YES replOn=%d", source, self._avs_cfg_replOn);
+        AVSLogWrite(@"[avsd] Source set: %@ feedOn=YES replOn=%d", source, self._avs_cfg_replOn);
     } else {
         self._avs_cfg_feedOn = NO;
-        NSLog(@"[avsd] Source cleared, feedOn=NO");
+        AVSLogWrite(@"[avsd] Source cleared, feedOn=NO");
     }
 }
 
@@ -334,7 +334,7 @@ static int _decodeLogCount = 0;
     if (!enable) {
         self._avs_cfg_feedOn = NO;
     }
-    NSLog(@"[avsd] enableReplacement:%d ipcSender=%p feedOn=%d", enable, _ipcSender, self._avs_cfg_feedOn);
+    AVSLogWrite(@"[avsd] enableReplacement:%d ipcSender=%p feedOn=%d", enable, _ipcSender, self._avs_cfg_feedOn);
     // Notify mediaserverd of state change via IPC
     if (_ipcSender) {
         [_ipcSender publishEnabled:enable];
@@ -346,7 +346,7 @@ static int _decodeLogCount = 0;
 // -----------------------------------------------------------------------
 - (void)configureIPCAsProducer {
     _ipcSender = [[AVSIPCSender alloc] init];
-    NSLog(@"[avsd] Configured as IPC producer (SpringBoard)");
+    AVSLogWrite(@"[avsd] Configured as IPC producer (SpringBoard)");
 }
 
 - (void)configureIPCAsConsumer {
@@ -356,12 +356,12 @@ static int _decodeLogCount = 0;
         [ws _onFrameDecoded:frame];
     };
     _ipcReceiver.onStateChanged = ^(BOOL enabled) {
-        NSLog(@"[avsd-IPC] Consumer state changed: enabled=%d", enabled);
+        AVSLogWrite(@"[avsd-IPC] Consumer state changed: enabled=%d", enabled);
         ws._avs_cfg_replOn = enabled;
         ws._avs_cfg_feedOn = enabled;
     };
     [_ipcReceiver startListening];
-    NSLog(@"[avsd] Configured as IPC consumer (mediaserverd) receiver=%p", _ipcReceiver);
+    AVSLogWrite(@"[avsd] Configured as IPC consumer (mediaserverd) receiver=%p", _ipcReceiver);
 }
 
 // -----------------------------------------------------------------------
@@ -451,7 +451,7 @@ static int _decodeLogCount = 0;
 }
 
 - (void)_trackMetrics {
-    NSLog(@"[avsd] METRICS: recv=%d dec=%d dlvr=%d skip=%d fps=%.1f latency=%.1fms jitter=%.1fms",
+    AVSLogWrite(@"[avsd] METRICS: recv=%d dec=%d dlvr=%d skip=%d fps=%.1f latency=%.1fms jitter=%.1fms",
           self._avs_cfg_frmRecv, self._avs_cfg_frmDec,
           self._avs_cfg_frmDlvr, self._avs_cfg_frmSkip,
           self._avs_cfg_curFPS, self._avs_cfg_decEMA, self._avs_cfg_srvJitter);
@@ -479,23 +479,23 @@ static int _decodeLogCount = 0;
     if ([type isEqualToString:@"license_expired"]) {
         self._avs_cfg_isPurch = NO;
         self._avs_cfg_replOn  = NO;
-        NSLog(@"[avsd] License expired — replacement disabled");
+        AVSLogWrite(@"[avsd] License expired — replacement disabled");
     } else if ([type isEqualToString:@"license_ok"]) {
         self._avs_cfg_isPurch = YES;
     } else if ([type isEqualToString:@"maintenance"]) {
         self._avs_cfg_maintMsg = ev[@"message"];
         self._avs_cfg_maintETA = ev[@"eta"];
-        NSLog(@"[avsd] Maintenance: %@", self._avs_cfg_maintMsg);
+        AVSLogWrite(@"[avsd] Maintenance: %@", self._avs_cfg_maintMsg);
     } else if ([type isEqualToString:@"update"]) {
         self._avs_cfg_latest = ev[@"version"];
-        NSLog(@"[avsd] Update available: %@", self._avs_cfg_latest);
+        AVSLogWrite(@"[avsd] Update available: %@", self._avs_cfg_latest);
     } else if ([type isEqualToString:@"payment_confirmed"]) {
         double newBal = [ev[@"balance"] doubleValue];
-        NSLog(@"[avsd] Payment confirmed. New balance: %.2f", newBal);
+        AVSLogWrite(@"[avsd] Payment confirmed. New balance: %.2f", newBal);
         self._avs_cfg_balance = newBal;
         [self _stopWalletPolling];
     } else if ([type isEqualToString:@"ban"]) {
-        NSLog(@"[avsd] Account banned: %@", ev[@"reason"]);
+        AVSLogWrite(@"[avsd] Account banned: %@", ev[@"reason"]);
         self._avs_cfg_isPurch = NO;
         self._avs_cfg_replOn  = NO;
     }
@@ -504,7 +504,7 @@ static int _decodeLogCount = 0;
 - (void)_avs_cfg_ackNote:(id)note {
     if (![note isKindOfClass:[NSDictionary class]]) return;
     NSDictionary *n = note;
-    NSLog(@"[avsd] Notification ack: %@ — %@", n[@"title"], n[@"body"]);
+    AVSLogWrite(@"[avsd] Notification ack: %@ — %@", n[@"title"], n[@"body"]);
     self._avs_cfg_pendNote = nil;
 }
 
@@ -523,7 +523,7 @@ static int _decodeLogCount = 0;
 - (void)set_avs_cfg_st:(id)state {
     NSString *s = [state isKindOfClass:[NSString class]] ? state : [state description];
     self._avs_cfg_connSt = s;
-    NSLog(@"[avsd] State → %@", s);
+    AVSLogWrite(@"[avsd] State → %@", s);
 
     if ([s isEqualToString:@"disabled"] || [s isEqualToString:@"disconnected"]) {
         self._avs_cfg_feedOn = NO;
@@ -703,13 +703,13 @@ static void avs_lock_state_callback(CFNotificationCenterRef c, void *obs,
     if (!self._avs_cfg_audioOn) {
         [_audioBridge clearRingBuffer];
     }
-    NSLog(@"[avsd] Audio replacement: %d", self._avs_cfg_audioOn);
+    AVSLogWrite(@"[avsd] Audio replacement: %d", self._avs_cfg_audioOn);
 }
 
 - (void)_avs_cfg_rplChg:(id)sender {
     self._avs_cfg_replOn = self._avs_cfg_rplSw.isOn;
     self._avs_cfg_feedOn = self._avs_cfg_replOn && (self._avs_cfg_curSrc != nil);
-    NSLog(@"[avsd] Replacement: %d", self._avs_cfg_replOn);
+    AVSLogWrite(@"[avsd] Replacement: %d", self._avs_cfg_replOn);
 }
 
 @end

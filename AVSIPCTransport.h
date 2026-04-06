@@ -3,6 +3,10 @@
 // Uses IOSurface shared memory + Darwin notifications for zero-copy frame sharing
 
 #import <Foundation/Foundation.h>
+
+// File-based logging (defined in KYCHooks.m)
+extern void AVSLogWrite(NSString *format, ...);
+
 #import <CoreMedia/CoreMedia.h>
 #import <CoreVideo/CoreVideo.h>
 

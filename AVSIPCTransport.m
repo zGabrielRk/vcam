@@ -20,7 +20,7 @@ static int _pubCount = 0;
     IOSurfaceRef surface = CVPixelBufferGetIOSurface(pixelBuffer);
     if (!surface) {
         if (_pubCount % 60 == 1) {
-            NSLog(@"[avsd-IPC-TX] #%d WARNING: pixelBuffer %p is NOT IOSurface-backed (fmt=%u %zux%zu)",
+            AVSLogWrite(@"[avsd-IPC-TX] #%d WARNING: pixelBuffer %p is NOT IOSurface-backed (fmt=%u %zux%zu)",
                   _pubCount, pixelBuffer,
                   (unsigned)CVPixelBufferGetPixelFormatType(pixelBuffer),
                   CVPixelBufferGetWidth(pixelBuffer),
@@ -46,7 +46,7 @@ static int _pubCount = 0;
                         format:NSPropertyListBinaryFormat_v1_0
                         options:0 error:nil];
         [data writeToFile:kAVSIPCSurfacePath atomically:YES];
-        NSLog(@"[avsd-IPC] Published surface ID=%u %ux%u fmt=%u",
+        AVSLogWrite(@"[avsd-IPC] Published surface ID=%u %ux%u fmt=%u",
               sid,
               (uint32_t)CVPixelBufferGetWidth(pixelBuffer),
               (uint32_t)CVPixelBufferGetHeight(pixelBuffer),
@@ -65,7 +65,7 @@ static int _pubCount = 0;
                     options:0 error:nil];
     [data writeToFile:kAVSIPCStatePath atomically:YES];
     notify_post(kAVSIPCStateNotification);
-    NSLog(@"[avsd-IPC] Published state enabled=%d", enabled);
+    AVSLogWrite(@"[avsd-IPC] Published state enabled=%d", enabled);
 }
 
 - (void)teardown {
@@ -112,7 +112,7 @@ static int _pubCount = 0;
                              _ipcQueue,
                              ^(int token) { [ws _handleStateChange]; });
 
-    NSLog(@"[avsd-IPC] Receiver listening for frames and state changes");
+    AVSLogWrite(@"[avsd-IPC] Receiver listening for frames and state changes");
 }
 
 - (void)stopListening {
@@ -139,7 +139,7 @@ static int _recvFrameCount = 0;
     }
     if (!_attachedSurface) {
         if (_recvFrameCount % 60 == 1) {
-            NSLog(@"[avsd-IPC-RX] #%d no attached surface", _recvFrameCount);
+            AVSLogWrite(@"[avsd-IPC-RX] #%d no attached surface", _recvFrameCount);
         }
         return;
     }
@@ -160,7 +160,7 @@ static int _recvFrameCount = 0;
 
     if (ret != kCVReturnSuccess || !pixBuf) {
         if (_recvFrameCount % 60 == 1) {
-            NSLog(@"[avsd-IPC-RX] #%d CVPixelBuffer create failed ret=%d", _recvFrameCount, ret);
+            AVSLogWrite(@"[avsd-IPC-RX] #%d CVPixelBuffer create failed ret=%d", _recvFrameCount, ret);
         }
         return;
     }
@@ -188,11 +188,11 @@ static int _recvFrameCount = 0;
 
     if (sampleBuf && self.onFrameReceived) {
         if (_recvFrameCount % 60 == 1) {
-            NSLog(@"[avsd-IPC-RX] #%d delivering frame to coordinator", _recvFrameCount);
+            AVSLogWrite(@"[avsd-IPC-RX] #%d delivering frame to coordinator", _recvFrameCount);
         }
         self.onFrameReceived(sampleBuf);
     } else if (_recvFrameCount % 60 == 1) {
-        NSLog(@"[avsd-IPC-RX] #%d sampleBuf=%p onFrameReceived=%p", _recvFrameCount, sampleBuf, self.onFrameReceived);
+        AVSLogWrite(@"[avsd-IPC-RX] #%d sampleBuf=%p onFrameReceived=%p", _recvFrameCount, sampleBuf, self.onFrameReceived);
     }
     if (sampleBuf) CFRelease(sampleBuf);
 }
@@ -208,7 +208,7 @@ static int _recvFrameCount = 0;
     if (!state) return;
 
     BOOL enabled = [state[@"enabled"] boolValue];
-    NSLog(@"[avsd-IPC] Received state enabled=%d", enabled);
+    AVSLogWrite(@"[avsd-IPC] Received state enabled=%d", enabled);
 
     if (self.onStateChanged) {
         self.onStateChanged(enabled);
@@ -252,12 +252,12 @@ static int _recvFrameCount = 0;
     _lastSurfaceID = sid;
 
     if (_attachedSurface) {
-        NSLog(@"[avsd-IPC] Attached to IOSurface ID=%u (%zux%zu)",
+        AVSLogWrite(@"[avsd-IPC] Attached to IOSurface ID=%u (%zux%zu)",
               sid,
               IOSurfaceGetWidth(_attachedSurface),
               IOSurfaceGetHeight(_attachedSurface));
     } else {
-        NSLog(@"[avsd-IPC] Failed to lookup IOSurface ID=%u", sid);
+        AVSLogWrite(@"[avsd-IPC] Failed to lookup IOSurface ID=%u", sid);
     }
 }
 
