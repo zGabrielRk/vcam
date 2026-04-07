@@ -13,7 +13,6 @@
 #import "AVSDataProvider.h"
 #import "AVSServiceConfiguration.h"
 #import "AVSWSProtocol.h"
-#import "AVSIPCTransport.h"
 #import <QuartzCore/QuartzCore.h>
 #import <CommonCrypto/CommonCrypto.h>
 #include <sys/socket.h>
@@ -35,10 +34,6 @@ static const double kStaleFrameThresholdMs = 250.0;
     AVSMotionSynthesizer  *_motionSynth;
     AVSFormatAnalyzer     *_formatAnalyzer;
     AVSStreamTransport    *_transport;
-
-    // IPC bridge (cross-process frame sharing)
-    AVSIPCSender   *_ipcSender;    // non-nil only in SpringBoard
-    AVSIPCReceiver *_ipcReceiver;  // non-nil only in mediaserverd
 
     NSLock          *_frameLock;
     NSLock          *_eventLock;
@@ -238,12 +233,6 @@ static const double kStaleFrameThresholdMs = 250.0;
     }
     _avs_cfg_decEMA = _decodeEMA;
 
-    // Publish frame via IPC to mediaserverd (SpringBoard only)
-    if (_ipcSender) {
-        CVPixelBufferRef pixBuf = CMSampleBufferGetImageBuffer(processed);
-        if (pixBuf) [_ipcSender publishPixelBuffer:pixBuf];
-    }
-
     // Invoke decode callback para preview
     void (^onDec)(CMSampleBufferRef) = _avs_cfg_onDec;
     if (onDec) {
@@ -327,10 +316,6 @@ static const double kStaleFrameThresholdMs = 250.0;
     self._avs_cfg_replOn = enable;
     if (!enable) {
         self._avs_cfg_feedOn = NO;
-    }
-    // Notify mediaserverd of state change via IPC
-    if (_ipcSender) {
-        [_ipcSender publishEnabled:enable];
     }
 }
 
@@ -753,29 +738,6 @@ static void avs_lock_state_callback(CFNotificationCenterRef c, void *obs,
     const float *samples = (const float *)pcmData.bytes;
     int count = (int)(pcmData.length / sizeof(float)) / MAX(channels, 1);
     [self submitAudioPCM:samples count:count channels:channels sampleRate:(double)rate];
-}
-
-// -----------------------------------------------------------------------
-// IPC configuration (cross-process frame sharing)
-// -----------------------------------------------------------------------
-- (void)configureIPCAsProducer {
-    _ipcSender = [[AVSIPCSender alloc] init];
-    NSLog(@"[avsd] Configured as IPC producer (SpringBoard)");
-}
-
-- (void)configureIPCAsConsumer {
-    _ipcReceiver = [[AVSIPCReceiver alloc] init];
-    __weak typeof(self) ws = self;
-    _ipcReceiver.onFrameReceived = ^(CMSampleBufferRef frame) {
-        [ws _onFrameDecoded:frame];
-    };
-    _ipcReceiver.onStateChanged = ^(BOOL enabled) {
-        NSLog(@"[avsd-IPC] Consumer state changed: enabled=%d", enabled);
-        ws._avs_cfg_replOn = enabled;
-        ws._avs_cfg_feedOn = enabled;
-    };
-    [_ipcReceiver startListening];
-    NSLog(@"[avsd] Configured as IPC consumer (mediaserverd)");
 }
 
 @end

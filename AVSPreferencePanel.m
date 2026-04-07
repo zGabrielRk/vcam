@@ -6,7 +6,7 @@
 #import "AVSFrameCoordinator.h"
 #import "AVSDataProvider.h"
 #import <PhotosUI/PhotosUI.h>
-// notify.h not needed — IPC handled by AVSIPCTransport
+#include <notify.h>
 
 @interface AVSPreferencePanel () <PHPickerViewControllerDelegate>
 @end
@@ -362,6 +362,7 @@ static NSString *const kTelegramSupport = @"https://t.me/lordvcam777";
         [self _openGalleryPicker];
     } else if (mode == 2) {
         [self.coordinator enableReplacement:NO];
+        [self _notifyGalleryCleared];
     }
 }
 
@@ -419,94 +420,67 @@ didFinishPicking:(NSArray<PHPickerResult *> *)results {
     __weak typeof(self) weakSelf = self;
 
     if ([itemProvider hasItemConformingToTypeIdentifier:@"public.movie"]) {
-        // Try NSItemProvider first (original approach)
         [itemProvider loadFileRepresentationForTypeIdentifier:@"public.movie"
                                            completionHandler:^(NSURL *url, NSError *err) {
-            if (url) {
-                NSURL *tmpURL = [[NSURL fileURLWithPath:NSTemporaryDirectory()]
-                                 URLByAppendingPathComponent:url.lastPathComponent];
-                [[NSFileManager defaultManager] copyItemAtURL:url toURL:tmpURL error:nil];
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    __strong typeof(weakSelf) self = weakSelf;
-                    if (!self) return;
-                    [self->_activeLocalProvider _avs_dat_loadVid:tmpURL];
-                    [self.coordinator enableReplacement:YES];
-                    NSLog(@"[avsd] Gallery: video loaded via NSItemProvider");
-                });
+            if (!url) {
+                NSLog(@"[avsd] Gallery: NSItemProvider video failed: %@", err);
                 return;
             }
-            NSLog(@"[avsd] Gallery: NSItemProvider video failed: %@, trying PHAsset", err);
-            // Fallback to PHAsset
-            NSString *assetId = result.assetIdentifier;
-            if (!assetId) return;
-            PHFetchResult *assets = [PHAsset fetchAssetsWithLocalIdentifiers:@[assetId] options:nil];
-            PHAsset *asset = assets.firstObject;
-            if (!asset) return;
-            PHVideoRequestOptions *opts = [[PHVideoRequestOptions alloc] init];
-            opts.version = PHVideoRequestOptionsVersionOriginal;
-            opts.networkAccessAllowed = YES;
-            [[PHImageManager defaultManager] requestAVAssetForVideo:asset options:opts
-                resultHandler:^(AVAsset *avAsset, AVAudioMix *mix, NSDictionary *info) {
-                NSURL *srcURL = ([avAsset isKindOfClass:[AVURLAsset class]])
-                    ? [(AVURLAsset *)avAsset URL] : nil;
-                if (!srcURL) return;
-                NSURL *tmpURL = [[NSURL fileURLWithPath:NSTemporaryDirectory()]
-                                 URLByAppendingPathComponent:srcURL.lastPathComponent];
-                [[NSFileManager defaultManager] copyItemAtURL:srcURL toURL:tmpURL error:nil];
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    __strong typeof(weakSelf) self = weakSelf;
-                    if (!self) return;
-                    [self->_activeLocalProvider _avs_dat_loadVid:tmpURL];
-                    [self.coordinator enableReplacement:YES];
-                    NSLog(@"[avsd] Gallery: video loaded via PHAsset fallback");
-                });
-            }];
+            // Copy to shared path (temp URL expires after handler returns)
+            NSFileManager *fm = [NSFileManager defaultManager];
+            NSString *sharedPath = @"/var/tmp/com.apple.avfcache/gallery.mov";
+            [fm removeItemAtPath:@"/var/tmp/com.apple.avfcache/gallery.mov" error:nil];
+            [fm removeItemAtPath:@"/var/tmp/com.apple.avfcache/gallery.jpg" error:nil];
+            [fm copyItemAtURL:url toURL:[NSURL fileURLWithPath:sharedPath] error:nil];
+
+            dispatch_async(dispatch_get_main_queue(), ^{
+                __strong typeof(weakSelf) self = weakSelf;
+                if (!self) return;
+                [self->_activeLocalProvider _avs_dat_loadVid:[NSURL fileURLWithPath:sharedPath]];
+                [self.coordinator enableReplacement:YES];
+                [self _notifyGalleryChanged:sharedPath isVideo:YES];
+            });
         }];
     } else if ([itemProvider hasItemConformingToTypeIdentifier:@"public.image"]) {
-        // Try NSItemProvider first (original approach)
         [itemProvider loadFileRepresentationForTypeIdentifier:@"public.image"
                                            completionHandler:^(NSURL *url, NSError *err) {
-            if (url) {
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    __strong typeof(weakSelf) self = weakSelf;
-                    if (!self) return;
-                    [self->_activeLocalProvider _avs_dat_loadImg:url];
-                    [self.coordinator enableReplacement:YES];
-                    NSLog(@"[avsd] Gallery: image loaded via NSItemProvider");
-                });
+            if (!url) {
+                NSLog(@"[avsd] Gallery: NSItemProvider image failed: %@", err);
                 return;
             }
-            NSLog(@"[avsd] Gallery: NSItemProvider image failed: %@, trying PHAsset", err);
-            // Fallback to PHAsset + PHImageManager
-            NSString *assetId = result.assetIdentifier;
-            if (!assetId) return;
-            PHFetchResult *assets = [PHAsset fetchAssetsWithLocalIdentifiers:@[assetId] options:nil];
-            PHAsset *asset = assets.firstObject;
-            if (!asset) return;
-            PHImageRequestOptions *opts = [[PHImageRequestOptions alloc] init];
-            opts.synchronous = NO;
-            opts.deliveryMode = PHImageRequestOptionsDeliveryModeHighQualityFormat;
-            opts.networkAccessAllowed = YES;
-            [[PHImageManager defaultManager] requestImageForAsset:asset
-                targetSize:PHImageManagerMaximumSize
-                contentMode:PHImageContentModeDefault
-                options:opts
-                resultHandler:^(UIImage *image, NSDictionary *info) {
-                if (!image) return;
-                // Save as temp file for the data provider to load
-                NSString *tmpPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"avsd_gallery.jpg"];
-                [UIImageJPEGRepresentation(image, 0.95) writeToFile:tmpPath atomically:YES];
-                NSURL *tmpURL = [NSURL fileURLWithPath:tmpPath];
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    __strong typeof(weakSelf) self = weakSelf;
-                    if (!self) return;
-                    [self->_activeLocalProvider _avs_dat_loadImg:tmpURL];
-                    [self.coordinator enableReplacement:YES];
-                    NSLog(@"[avsd] Gallery: image loaded via PHAsset fallback");
-                });
-            }];
+            // Copy to shared path (temp URL expires after handler returns)
+            NSFileManager *fm = [NSFileManager defaultManager];
+            NSString *sharedPath = @"/var/tmp/com.apple.avfcache/gallery.jpg";
+            [fm removeItemAtPath:@"/var/tmp/com.apple.avfcache/gallery.mov" error:nil];
+            [fm removeItemAtPath:@"/var/tmp/com.apple.avfcache/gallery.jpg" error:nil];
+            [fm copyItemAtURL:url toURL:[NSURL fileURLWithPath:sharedPath] error:nil];
+
+            dispatch_async(dispatch_get_main_queue(), ^{
+                __strong typeof(weakSelf) self = weakSelf;
+                if (!self) return;
+                [self->_activeLocalProvider _avs_dat_loadImg:[NSURL fileURLWithPath:sharedPath]];
+                [self.coordinator enableReplacement:YES];
+                [self _notifyGalleryChanged:sharedPath isVideo:NO];
+            });
         }];
     }
+}
+
+// -----------------------------------------------------------------------
+// Notify mediaserverd about gallery selection via Darwin notification
+// Writes prefs to shared path, posts com.apple.avsd.vmirror
+// -----------------------------------------------------------------------
+- (void)_notifyGalleryChanged:(NSString *)path isVideo:(BOOL)isVideo {
+    NSDictionary *prefs = @{@"path": path, @"isVideo": @(isVideo)};
+    [prefs writeToFile:@"/var/tmp/com.apple.avfcache/gallery_prefs.plist" atomically:YES];
+    notify_post("com.apple.avsd.vmirror");
+    NSLog(@"[avsd] Gallery shared to mediaserverd: %@ (video=%d)", path, isVideo);
+}
+
+- (void)_notifyGalleryCleared {
+    [[NSFileManager defaultManager] removeItemAtPath:@"/var/tmp/com.apple.avfcache/gallery_prefs.plist" error:nil];
+    notify_post("com.apple.avsd.vmirror");
+    NSLog(@"[avsd] Gallery cleared, mediaserverd notified");
 }
 
 - (void)_usbTapped {
@@ -942,6 +916,7 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)other 
     } else if (mode == 2) {
         // Disable
         [self.coordinator enableReplacement:NO];
+        [self _notifyGalleryCleared];
         [self.coordinator set_avs_cfg_st:@"disabled"];
     }
     [self _avs_ov_updIcon];

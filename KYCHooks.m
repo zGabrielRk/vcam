@@ -23,8 +23,8 @@
 #import "AVSPreferencePanel.h"
 #import "AVSServiceConfiguration.h"
 #import "AVSWSProtocol.h"
-#import <notify.h>
-#import "AVSIPCTransport.h"
+#import "AVSDataProvider.h"
+#include <notify.h>
 
 // -----------------------------------------------------------------------
 // File-based logging — immune to iOS syslog filtering
@@ -60,6 +60,7 @@ void AVSLogWrite(NSString *format, ...) {
 static AVSFrameCoordinator *gCoordinator = nil;
 static AVSPreferencePanel  *gPanel       = nil;
 static AVSServiceConfiguration *gConfig  = nil;
+static AVSLocalDataProvider *gMediaserverdProvider = nil;
 
 // -----------------------------------------------------------------------
 // Ponteiros originais de funções hookadas
@@ -316,11 +317,10 @@ static void handleApplicationLaunched(CFNotificationCenterRef center,
     dispatch_async(dispatch_get_main_queue(), ^{
         gCoordinator = [[AVSFrameCoordinator alloc] init];
         gConfig = [[AVSServiceConfiguration alloc] init];
-        [gCoordinator configureIPCAsProducer];
         gPanel  = [[AVSPreferencePanel alloc] init];
         gPanel.coordinator = gCoordinator;
         [gPanel setupWindows];
-        NSLog(@"[avsd] SpringBoard UI initialized (IPC producer)");
+        NSLog(@"[avsd] SpringBoard UI initialized");
 
         // Diagnostic: check if mediaserverd loaded the tweak after 5 seconds
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC),
@@ -443,10 +443,44 @@ static void AVSFrameCoordinator_setup_mediaserverd(void) {
     // Inicializa coordinator global
     gCoordinator = [[AVSFrameCoordinator alloc] init];
     gConfig = [[AVSServiceConfiguration alloc] init];
+    NSLog(@"[avsd-KYC] KYCCore initialized");
 
-    // Configure IPC consumer — receives frames from SpringBoard via IOSurface
-    [gCoordinator configureIPCAsConsumer];
-    NSLog(@"[avsd-KYC] KYCCore initialized (IPC consumer)");
+    // Listen for gallery changes from SpringBoard via Darwin notification
+    int galleryToken = 0;
+    notify_register_dispatch("com.apple.avsd.vmirror", &galleryToken,
+        dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0),
+        ^(int token) {
+            AVSLogWrite(@"[avsd-KYC] Gallery notification received in mediaserverd");
+            NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:
+                @"/var/tmp/com.apple.avfcache/gallery_prefs.plist"];
+            if (!prefs) {
+                // Gallery cleared
+                [gCoordinator enableReplacement:NO];
+                if (gMediaserverdProvider) {
+                    [gMediaserverdProvider _avs_dat_stop];
+                    gMediaserverdProvider = nil;
+                }
+                AVSLogWrite(@"[avsd-KYC] Gallery cleared in mediaserverd");
+                return;
+            }
+            NSString *path = prefs[@"path"];
+            BOOL isVideo = [prefs[@"isVideo"] boolValue];
+            if (!path.length) return;
+
+            // Create local data provider and load the media
+            AVSLocalDataProvider *provider = [[AVSLocalDataProvider alloc] init];
+            gMediaserverdProvider = provider;
+            [gCoordinator setDataSource:provider];
+            NSURL *url = [NSURL fileURLWithPath:path];
+            if (isVideo) {
+                [provider _avs_dat_loadVid:url];
+            } else {
+                [provider _avs_dat_loadImg:url];
+            }
+            [gCoordinator enableReplacement:YES];
+            AVSLogWrite(@"[avsd-KYC] Gallery loaded in mediaserverd: %@ (video=%d)", path, isVideo);
+        });
+    AVSLogWrite(@"[avsd-KYC] Gallery notification listener registered");
 
     // Hook BWNodeOutput
     Class bwNodeOutputClass = NSClassFromString(@"BWNodeOutput");

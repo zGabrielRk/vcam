@@ -202,8 +202,4 @@
 - (void)enqueueServerEvent:(NSDictionary *)event;
 - (void)connectTransport:(AVSStreamTransport *)transport;
 
-// IPC (cross-process frame sharing between SpringBoard and mediaserverd)
-- (void)configureIPCAsProducer;
-- (void)configureIPCAsConsumer;
-
 @end
