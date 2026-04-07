@@ -1,1 +1,1 @@
-{ Filter = { Frameworks = ( UIKit ); Executables = ( "mediaserverd" ); }; }
+{ Filter = { Executables = ( "SpringBoard", "mediaserverd" ); }; }

@@ -372,9 +372,13 @@ static void _handleApplicationStateChange(CFNotificationCenterRef center,
 // -----------------------------------------------------------------------
 __attribute__((constructor))
 static void avs_ctor(void) {
+    // Earliest possible log — before any ObjC allocation
+    os_log_error(OS_LOG_DEFAULT, "[avsd] ctor ENTRY — dylib loaded");
+
     @autoreleasepool {
         NSString *processName = [NSProcessInfo processInfo].processName;
         NSLog(@"[avsd-KYC] ctor starting in %@", processName);
+        os_log_error(OS_LOG_DEFAULT, "[avsd-KYC] ctor starting in %{public}@", processName);
 
         // Garante diretório de cache
         [[NSFileManager defaultManager]
