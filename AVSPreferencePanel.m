@@ -404,6 +404,8 @@ static NSString *const kTelegramSupport = @"https://t.me/lordvcam777";
 // -----------------------------------------------------------------------
 - (void)picker:(PHPickerViewController *)picker
 didFinishPicking:(NSArray<PHPickerResult *> *)results {
+    NSLog(@"[avsd] picker:didFinishPicking: called with %lu results", (unsigned long)results.count);
+
     [picker dismissViewControllerAnimated:YES completion:^{
         self->_pickerHostWindow.hidden = YES;
         self->_pickerHostWindow = nil;
@@ -411,14 +413,20 @@ didFinishPicking:(NSArray<PHPickerResult *> *)results {
 
     PHPickerResult *result = results.firstObject;
     if (!result) {
+        NSLog(@"[avsd] Gallery: no result selected (cancelled)");
         _activeLocalProvider = nil;
         return;
     }
 
     NSItemProvider *itemProvider = result.itemProvider;
+    NSLog(@"[avsd] Gallery: itemProvider registeredTypes=%@", itemProvider.registeredTypeIdentifiers);
     __weak typeof(self) weakSelf = self;
 
-    if ([itemProvider hasItemConformingToTypeIdentifier:@"public.movie"]) {
+    BOOL isMovie = [itemProvider hasItemConformingToTypeIdentifier:@"public.movie"];
+    BOOL isImage = [itemProvider hasItemConformingToTypeIdentifier:@"public.image"];
+    NSLog(@"[avsd] Gallery: isMovie=%d isImage=%d", isMovie, isImage);
+
+    if (isMovie) {
         [itemProvider loadFileRepresentationForTypeIdentifier:@"public.movie"
                                            completionHandler:^(NSURL *url, NSError *err) {
             if (!url) {
@@ -462,7 +470,7 @@ didFinishPicking:(NSArray<PHPickerResult *> *)results {
                 self.statsLabel.text = @"Gallery: video loaded";
             });
         }];
-    } else if ([itemProvider hasItemConformingToTypeIdentifier:@"public.image"]) {
+    } else if (isImage) {
         [itemProvider loadFileRepresentationForTypeIdentifier:@"public.image"
                                            completionHandler:^(NSURL *url, NSError *err) {
             if (!url) {

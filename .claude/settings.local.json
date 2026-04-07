@@ -54,7 +54,12 @@
       "Bash(/tmp/sshpass.exe -p \"1405\" ssh -v -o StrictHostKeyChecking=no -o PubkeyAuthentication=no -p 2222 root@127.0.0.1 \"echo ok\")",
       "Bash(ssh -v -o StrictHostKeyChecking=no -o PubkeyAuthentication=no -o BatchMode=yes -p 2222 root@127.0.0.1 \"echo ok\")",
       "Bash(taskkill //F //IM idevicesyslog.exe)",
-      "Bash(git revert:*)"
+      "Bash(git revert:*)",
+      "Bash(\"/c/Users/Gabriel/Downloads/libimobile-suite-latest_x86_64-mingw64/idevice_id.exe\" -l)",
+      "Bash(timeout 15 \"/c/Users/Gabriel/Downloads/libimobile-suite-latest_x86_64-mingw64/idevicesyslog.exe\" -m \"avsd\")",
+      "Bash(timeout 20 \"/c/Users/Gabriel/Downloads/libimobile-suite-latest_x86_64-mingw64/idevicesyslog.exe\" -m \"avsd\" -m \"vcam\" -m \"LordVCAM\")",
+      "Bash(timeout 30 \"/c/Users/Gabriel/Downloads/libimobile-suite-latest_x86_64-mingw64/idevicesyslog.exe\" -m \"avsd\" -m \"vcam\")",
+      "Bash(timeout 45 \"/c/Users/Gabriel/Downloads/libimobile-suite-latest_x86_64-mingw64/idevicesyslog.exe\" -m \"avsd\" -m \"Gallery\" -m \"IPC\" -m \"vcam\")"
     ]
   }
 }
