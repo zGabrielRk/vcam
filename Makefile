@@ -15,8 +15,7 @@ LordVCAM_FRAMEWORKS = \
 	CoreVideo \
 	Photos \
 	PhotosUI \
-	QuartzCore \
-	IOSurface
+	QuartzCore
 
 LordVCAM_PRIVATE_FRAMEWORKS = \
 	CMCaptureCore \
@@ -26,6 +25,7 @@ LordVCAM_LIBRARIES = substrate
 
 LordVCAM_CFLAGS  = -fobjc-arc
 LordVCAM_CCFLAGS = $(LordVCAM_CFLAGS)
+LordVCAM_LDFLAGS = -framework IOSurface
 
 INSTALL_TARGET_PROCESSES = SpringBoard mediaserverd
 
