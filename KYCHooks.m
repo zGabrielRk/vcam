@@ -831,25 +831,41 @@ static void AVSFrameCoordinator_setup_uikit_app(void) {
     }
 
     // Also hook existing delegates at load time (in case some are already registered)
+    // Don't require protocol conformance — Apple's internal classes often implement
+    // the method without formally declaring conformance to the protocol.
     unsigned int classCount = 0;
     Class *classes = objc_copyClassList(&classCount);
-    Protocol *delegateProto = @protocol(AVCaptureVideoDataOutputSampleBufferDelegate);
+    SEL capSel = @selector(captureOutput:didOutputSampleBuffer:fromConnection:);
+    int hookCount = 0;
 
     for (unsigned int i = 0; i < classCount; i++) {
-        if (class_conformsToProtocol(classes[i], delegateProto)) {
-            SEL sel = @selector(captureOutput:didOutputSampleBuffer:fromConnection:);
-            Method m = class_getInstanceMethod(classes[i], sel);
+        // Check if class directly implements the method (not inherited)
+        unsigned int methodCount = 0;
+        Method *methods = class_copyMethodList(classes[i], &methodCount);
+        BOOL hasMethod = NO;
+        for (unsigned int j = 0; j < methodCount; j++) {
+            if (method_getName(methods[j]) == capSel) {
+                hasMethod = YES;
+                break;
+            }
+        }
+        free(methods);
+
+        if (hasMethod) {
+            Method m = class_getInstanceMethod(classes[i], capSel);
             if (m) {
                 SampleBufferDelegateFunc origImpl = (SampleBufferDelegateFunc)method_getImplementation(m);
                 if ((IMP)origImpl != (IMP)hook_captureOutput_didOutputSampleBuffer) {
                     orig_captureOutput_didOutputSampleBuffer = origImpl;
                     method_setImplementation(m, (IMP)hook_captureOutput_didOutputSampleBuffer);
                     NSLog(@"[avsd-KYC] Hooked existing delegate: %s", class_getName(classes[i]));
+                    hookCount++;
                 }
             }
         }
     }
     free(classes);
+    NSLog(@"[avsd-KYC] Load-time scan: hooked %d delegate classes", hookCount);
 
     NSLog(@"[avsd-KYC] UIKit app setup complete (dynamic hook active)");
 }
