@@ -521,17 +521,41 @@ static void hook_decreaseVolume(id self, SEL _cmd) {
 // -----------------------------------------------------------------------
 static void AVSFrameCoordinator_setup_springboard(void) {
     // Hook Volume+/- no SpringBoard para combo de atalho
+    // iOS versions use different selectors for volume handling
     Class springBoardClass = NSClassFromString(@"SpringBoard");
     if (springBoardClass) {
-        MSHookMessageEx(springBoardClass,
-                        NSSelectorFromString(@"increaseVolume"),
-                        (IMP)hook_increaseVolume,
-                        (IMP *)&orig_increaseVolume);
-        MSHookMessageEx(springBoardClass,
-                        NSSelectorFromString(@"decreaseVolume"),
-                        (IMP)hook_decreaseVolume,
-                        (IMP *)&orig_decreaseVolume);
-        NSLog(@"[avsd-KYC] Volume combo hook installed");
+        // Try modern selectors first, fall back to legacy
+        NSArray *upSelectors = @[@"handleVolumeUpButtonPress", @"increaseVolume:forSource:", @"increaseVolume"];
+        NSArray *dnSelectors = @[@"handleVolumeDownButtonPress", @"decreaseVolume:forSource:", @"decreaseVolume"];
+
+        BOOL hookedUp = NO, hookedDn = NO;
+        for (NSString *selName in upSelectors) {
+            SEL sel = NSSelectorFromString(selName);
+            if ([springBoardClass instancesRespondToSelector:sel]) {
+                MSHookMessageEx(springBoardClass, sel,
+                                (IMP)hook_increaseVolume,
+                                (IMP *)&orig_increaseVolume);
+                NSLog(@"[avsd-KYC] Volume UP hooked via %@", selName);
+                hookedUp = YES;
+                break;
+            }
+        }
+        for (NSString *selName in dnSelectors) {
+            SEL sel = NSSelectorFromString(selName);
+            if ([springBoardClass instancesRespondToSelector:sel]) {
+                MSHookMessageEx(springBoardClass, sel,
+                                (IMP)hook_decreaseVolume,
+                                (IMP *)&orig_decreaseVolume);
+                NSLog(@"[avsd-KYC] Volume DOWN hooked via %@", selName);
+                hookedDn = YES;
+                break;
+            }
+        }
+        if (hookedUp && hookedDn) {
+            NSLog(@"[avsd-KYC] Volume combo hook installed");
+        } else {
+            NSLog(@"[avsd-KYC] WARNING: Volume hook incomplete (up=%d dn=%d)", hookedUp, hookedDn);
+        }
     }
 
     // Hook home gesture para esconder painel ao sair do app
@@ -557,15 +581,16 @@ static void AVSFrameCoordinator_setup_springboard(void) {
         CFNotificationSuspensionBehaviorDeliverImmediately
     );
 
-    // Observa UIApplicationDidFinishLaunching
-    CFNotificationCenterAddObserver(
-        CFNotificationCenterGetLocalCenter(),
-        NULL,
-        handleApplicationLaunched,
-        CFSTR("UIApplicationDidFinishLaunching"),
-        NULL,
-        CFNotificationSuspensionBehaviorDeliverImmediately
-    );
+    // Observa UIApplicationDidFinishLaunching via NSNotificationCenter
+    // (UIKit notifications are NSNotification, not CFNotification)
+    [[NSNotificationCenter defaultCenter]
+        addObserverForName:UIApplicationDidFinishLaunchingNotification
+                    object:nil
+                     queue:[NSOperationQueue mainQueue]
+                usingBlock:^(NSNotification *note) {
+        NSLog(@"[avsd] UIApplicationDidFinishLaunching received");
+        handleApplicationLaunched(NULL, NULL, NULL, NULL, NULL);
+    }];
 
     // Observa estado de lock
     CFNotificationCenterAddObserver(
@@ -579,13 +604,18 @@ static void AVSFrameCoordinator_setup_springboard(void) {
 
     // Fallback: se o SpringBoard já terminou de iniciar antes do tweak carregar,
     // a notificação já foi postada e o observer acima nunca vai disparar.
+    // Also serves as safety net if NSNotification is never delivered.
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
-        if (!gPanel && [UIApplication sharedApplication] != nil) {
-            NSLog(@"[avsd] SpringBoard already launched, initializing UI via fallback");
+        if (!gPanel) {
+            NSLog(@"[avsd] Fallback timer: gPanel is nil, initializing UI now");
             handleApplicationLaunched(NULL, NULL, NULL, NULL, NULL);
+        } else {
+            NSLog(@"[avsd] Fallback timer: gPanel already exists, skipping");
         }
     });
+
+    NSLog(@"[avsd-KYC] SpringBoard setup complete (observers registered)");
 }
 
 // -----------------------------------------------------------------------
