@@ -9,9 +9,6 @@
 #import <substrate.h>
 #import <dlfcn.h>
 #import <objc/runtime.h>
-#import <signal.h>
-#import <execinfo.h>
-#import <mach/mach.h>
 #import <os/log.h>
 #import <QuartzCore/QuartzCore.h>
 
@@ -81,87 +78,8 @@ static SessionMonitorInitFunc orig_sessionMonitorInit = NULL;
 typedef void (*PhotoOutputFunc)(id, SEL, id, id);
 static PhotoOutputFunc orig_photoOutput __attribute__((unused)) = NULL;
 
-// -----------------------------------------------------------------------
-// Crash handler: captura SIGSEGV/SIGBUS/SIGFPE
-// Escreve em /var/tmp/com.apple.avfcache/crash.txt
-// -----------------------------------------------------------------------
-static void avs_signal_handler(int signum, siginfo_t *info, void *context) {
-    const char *sigName;
-    switch (signum) {
-        case SIGSEGV: sigName = "SIGSEGV"; break;
-        case SIGBUS:  sigName = "SIGBUS";  break;
-        case SIGFPE:  sigName = "SIGFPE";  break;
-        default:      sigName = "UNKNOWN"; break;
-    }
-
-    ucontext_t *uc = (ucontext_t *)context;
-    void *pc = (void *)__darwin_arm_thread_state64_get_pc(uc->uc_mcontext->__ss);
-    void *lr = (void *)__darwin_arm_thread_state64_get_lr(uc->uc_mcontext->__ss);
-    void *fp = (void *)__darwin_arm_thread_state64_get_fp(uc->uc_mcontext->__ss);
-
-    // Symbolicate PC
-    Dl_info pcInfo = {0}, lrInfo = {0};
-    dladdr(pc, &pcInfo);
-    dladdr(lr, &lrInfo);
-
-    // Stack trace
-    void *frames[32];
-    int frameCount = backtrace(frames, 32);
-    char **symbols = backtrace_symbols(frames, frameCount);
-
-    // Monta log
-    NSMutableString *log = [NSMutableString string];
-    [log appendFormat:@"AVServicesd\n"];
-    [log appendFormat:@" Signal %s (%d)\n", sigName, signum];
-    [log appendFormat:@"Signal %s at address %p\n\n", sigName, info->si_addr];
-    [log appendFormat:@"PC=0x%llx (%s+0x%llx) LR=0x%llx (%s+0x%llx) FP=0x%llx\n",
-        (uint64_t)pc,
-        pcInfo.dli_sname ?: "?",
-        (uint64_t)pc - (uint64_t)pcInfo.dli_saddr,
-        (uint64_t)lr,
-        lrInfo.dli_sname ?: "?",
-        (uint64_t)lr - (uint64_t)lrInfo.dli_saddr,
-        (uint64_t)fp
-    ];
-
-    // Registros ARM64
-    uint64_t *x = (uint64_t *)&uc->uc_mcontext->__ss.__x[0];
-    [log appendFormat:@"  x0=0x%llx x1=0x%llx x2=0x%llx x3=0x%llx\n", x[0],x[1],x[2],x[3]];
-    [log appendFormat:@"  x19=0x%llx x20=0x%llx x21=0x%llx x22=0x%llx\n\n", x[19],x[20],x[21],x[22]];
-
-    [log appendFormat:@"Stack:\n"];
-    for (int i = 0; i < frameCount; i++) {
-        Dl_info fi = {0};
-        dladdr(frames[i], &fi);
-        if (fi.dli_sname) {
-            [log appendFormat:@"  %d: %s + %ld\n", i, fi.dli_sname,
-                (long)((uint64_t)frames[i] - (uint64_t)fi.dli_saddr)];
-        } else {
-            [log appendFormat:@"  %d: %p\n", i, frames[i]];
-        }
-    }
-    free(symbols);
-
-    // Escreve em disco
-    [log writeToFile:@"/var/tmp/com.apple.avfcache/crash.txt"
-          atomically:NO
-            encoding:NSUTF8StringEncoding
-               error:nil];
-
-    // Re-raise para crash nativo
-    signal(signum, SIG_DFL);
-    raise(signum);
-}
-
-static void avs_setup_crash_handler(void) {
-    struct sigaction sa = {0};
-    sa.sa_sigaction = avs_signal_handler;
-    sa.sa_flags = SA_SIGINFO | SA_RESETHAND;
-    sigemptyset(&sa.sa_mask);
-    sigaction(SIGSEGV, &sa, NULL);
-    sigaction(SIGBUS,  &sa, NULL);
-    sigaction(SIGFPE,  &sa, NULL);
-}
+// Crash handler removed — custom signal handlers interfere with Apple's
+// crash reporter and can mask issues. Use IPS crash reports instead.
 
 // -----------------------------------------------------------------------
 // Hook: BWNodeOutput - ponto de injeção na pipeline de câmera
