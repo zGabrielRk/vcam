@@ -5,6 +5,7 @@
 #import "AVSDataProvider.h"
 #import <AVFoundation/AVFoundation.h>
 #import <PhotosUI/PhotosUI.h>
+#import <ImageIO/ImageIO.h>
 
 // -----------------------------------------------------------------------
 // AVSLocalDataProvider
@@ -107,14 +108,25 @@
     [self _avs_dat_stop];
     self.isVideo = NO;
 
-    UIImage *img = [UIImage imageWithContentsOfFile:url.path];
-    if (!img) return;
+    // Use ImageIO (CGImageSource) instead of UIImage — works in all processes
+    // including mediaserverd where UIKit is not available
+    CGImageSourceRef imgSrc = CGImageSourceCreateWithURL((__bridge CFURLRef)url, NULL);
+    if (!imgSrc) {
+        NSLog(@"[avsd] CGImageSourceCreateWithURL failed for %@", url);
+        return;
+    }
+    CGImageRef cgImg = CGImageSourceCreateImageAtIndex(imgSrc, 0, NULL);
+    CFRelease(imgSrc);
+    if (!cgImg) {
+        NSLog(@"[avsd] CGImageSourceCreateImageAtIndex failed");
+        return;
+    }
+
     self.currentMediaPath = url.path;
 
-    // Convert UIImage → CVPixelBuffer (32BGRA, Metal-compatible)
-    size_t w = (size_t)(img.size.width  * img.scale);
-    size_t h = (size_t)(img.size.height * img.scale);
-    if (w == 0 || h == 0) return;
+    size_t w = CGImageGetWidth(cgImg);
+    size_t h = CGImageGetHeight(cgImg);
+    if (w == 0 || h == 0) { CGImageRelease(cgImg); return; }
 
     NSDictionary *attrs = @{
         (__bridge NSString *)kCVPixelBufferCGImageCompatibilityKey:         @YES,
@@ -127,7 +139,7 @@
                                        kCVPixelFormatType_32BGRA,
                                        (__bridge CFDictionaryRef)attrs,
                                        &pixelBuf);
-    if (ret != kCVReturnSuccess || !pixelBuf) return;
+    if (ret != kCVReturnSuccess || !pixelBuf) { CGImageRelease(cgImg); return; }
 
     CVPixelBufferLockBaseAddress(pixelBuf, 0);
     void   *base        = CVPixelBufferGetBaseAddress(pixelBuf);
@@ -137,9 +149,10 @@
                                                 kCGImageAlphaNoneSkipFirst |
                                                 kCGBitmapByteOrder32Little);
     CGColorSpaceRelease(cs);
-    CGContextDrawImage(ctx, CGRectMake(0, 0, w, h), img.CGImage);
+    CGContextDrawImage(ctx, CGRectMake(0, 0, w, h), cgImg);
     CGContextRelease(ctx);
     CVPixelBufferUnlockBaseAddress(pixelBuf, 0);
+    CGImageRelease(cgImg);
 
     if (_staticPixelBuffer) {
         CVPixelBufferRelease(_staticPixelBuffer);

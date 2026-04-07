@@ -289,11 +289,11 @@ static id hook_FigCaptureClientSessionMonitor_init(id self, SEL _cmd) {
 // -----------------------------------------------------------------------
 // Hook: _addAuxImagesIfNeededForEncodingScheme - injeção em fotos
 // -----------------------------------------------------------------------
-typedef void (*AddAuxImagesFunc)(id, SEL, int, CMSampleBufferRef, id, id, id);
+typedef void (*AddAuxImagesFunc)(id, SEL, int, CMSampleBufferRef, id, id, id, BOOL);
 static AddAuxImagesFunc orig_addAuxImages;
 static void hook_addAuxImages(id self, SEL _cmd, int scheme,
                                CMSampleBufferRef sampleBuf, id meta,
-                               id settings, id flags) {
+                               id settings, id flags, BOOL embedThumb) {
     // Se replacement ativo, substitui o sample buffer antes de encodar
     CMSampleBufferRef replacement = NULL;
     if (gCoordinator) {
@@ -301,7 +301,7 @@ static void hook_addAuxImages(id self, SEL _cmd, int scheme,
         if (replacement != sampleBuf) sampleBuf = replacement;
         else replacement = NULL; // não precisa release
     }
-    orig_addAuxImages(self, _cmd, scheme, sampleBuf, meta, settings, flags);
+    orig_addAuxImages(self, _cmd, scheme, sampleBuf, meta, settings, flags, embedThumb);
     if (replacement) CFRelease(replacement);
 }
 

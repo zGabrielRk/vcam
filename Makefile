@@ -37,6 +37,7 @@ LordVCAM_FRAMEWORKS = \
 	Metal \
 	MetalKit \
 	CoreImage \
+	ImageIO \
 	VideoToolbox \
 	Photos \
 	PhotosUI \

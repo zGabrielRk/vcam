@@ -1,1 +1,0 @@
-{ Filter = { Frameworks = ( UIKit ); Executables = ( "mediaserverd" ); }; }

@@ -86,10 +86,17 @@ static const double kStaleFrameThresholdMs = 250.0;
 
         // Inicializa subsistemas
         _decoder       = [[AVSMediaDecoder alloc] init];
-        _renderPipeline= [[AVSRenderPipeline alloc] init];
         _audioBridge   = [[AVSAudioBridge alloc] init];
-        _motionSynth   = [[AVSMotionSynthesizer alloc] init];
         _formatAnalyzer= [[AVSFormatAnalyzer alloc] init];
+
+        // Metal/GPU pipeline e motion só funcionam em processos com GPU context
+        // mediaserverd é daemon sem GPU — skip para evitar crash/nil device
+        NSString *proc = [NSProcessInfo processInfo].processName;
+        BOOL isMediaserverd = [proc isEqualToString:@"mediaserverd"];
+        if (!isMediaserverd) {
+            _renderPipeline = [[AVSRenderPipeline alloc] init];
+            _motionSynth    = [[AVSMotionSynthesizer alloc] init];
+        }
 
         // Estado inicial
         self._avs_cfg_replOn  = NO;
@@ -145,7 +152,7 @@ static const double kStaleFrameThresholdMs = 250.0;
     if (self._avs_cfg_syncTimer) {
         dispatch_source_cancel(self._avs_cfg_syncTimer);
     }
-    [_motionSynth stop];
+    if (_motionSynth) [_motionSynth stop];
 }
 
 // -----------------------------------------------------------------------
@@ -196,8 +203,9 @@ static const double kStaleFrameThresholdMs = 250.0;
     _avs_cfg_curFmt = [_formatAnalyzer _avs_fa_info];
 
     // Aplica pipeline de render (filtros de cor, rotação, zoom, pan)
+    // _renderPipeline é nil em mediaserverd (sem GPU) — skip processamento
     CMSampleBufferRef processed = frame;
-    if (_avs_cfg_fxOn || _avs_cfg_vidRot != 0 || _avs_cfg_grainOn) {
+    if (_renderPipeline && (_avs_cfg_fxOn || _avs_cfg_vidRot != 0 || _avs_cfg_grainOn)) {
         processed = [_renderPipeline processFrame:frame];
         _avs_cfg_frmProc++;
     } else {
@@ -205,7 +213,7 @@ static const double kStaleFrameThresholdMs = 250.0;
     }
 
     // Blending de frames consecutivos
-    if (_renderPipeline.blendEnabled && _avs_cfg_lastPB) {
+    if (_renderPipeline && _renderPipeline.blendEnabled && _avs_cfg_lastPB) {
         _avs_cfg_blendCnt++;
     }
 
