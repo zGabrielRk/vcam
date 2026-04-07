@@ -23,7 +23,6 @@
 #import "AVSPreferencePanel.h"
 #import "AVSServiceConfiguration.h"
 #import "AVSWSProtocol.h"
-#import "AVSDataProvider.h"
 #import <notify.h>
 #import "AVSIPCTransport.h"
 
@@ -430,53 +429,6 @@ static void avs_ctor(void) {
 // -----------------------------------------------------------------------
 // Setup para mediaserverd
 // -----------------------------------------------------------------------
-// Local data provider for mediaserverd (loads media from shared directory)
-// -----------------------------------------------------------------------
-static AVSLocalDataProvider *gMediaserverdProvider = nil;
-
-static void avs_mediaserverd_loadSelection(void) {
-    NSString *selPath = @"/var/tmp/com.apple.avfcache/media_selection.plist";
-    NSDictionary *sel = [NSDictionary dictionaryWithContentsOfFile:selPath];
-    if (!sel) {
-        NSLog(@"[avsd-KYC] mediaserverd: no media_selection.plist found");
-        return;
-    }
-
-    NSString *mediaPath = sel[@"mediaPath"];
-    NSString *mediaType = sel[@"mediaType"];
-    BOOL replOn = [sel[@"replOn"] boolValue];
-
-    if (!mediaPath || ![[NSFileManager defaultManager] fileExistsAtPath:mediaPath]) {
-        NSLog(@"[avsd-KYC] mediaserverd: media file not found at %@", mediaPath);
-        return;
-    }
-
-    NSLog(@"[avsd-KYC] mediaserverd: loading %@ media from %@", mediaType, mediaPath);
-
-    // Create or reuse local data provider
-    if (!gMediaserverdProvider) {
-        gMediaserverdProvider = [[AVSLocalDataProvider alloc] init];
-    } else {
-        [gMediaserverdProvider _avs_dat_stop];
-    }
-
-    // Set as data source (this wires up _avs_cfg_onDec callback)
-    [gCoordinator setDataSource:gMediaserverdProvider];
-
-    NSURL *mediaURL = [NSURL fileURLWithPath:mediaPath];
-    if ([mediaType isEqualToString:@"video"]) {
-        [gMediaserverdProvider _avs_dat_loadVid:mediaURL];
-    } else {
-        [gMediaserverdProvider _avs_dat_loadImg:mediaURL];
-    }
-
-    if (replOn) {
-        gCoordinator._avs_cfg_replOn = YES;
-        gCoordinator._avs_cfg_feedOn = YES;
-    }
-    NSLog(@"[avsd-KYC] mediaserverd: media loaded, replOn=%d feedOn=%d", replOn, replOn);
-}
-
 static void AVSFrameCoordinator_setup_mediaserverd(void) {
     // Carrega frameworks privados via dlopen
     void *cmCaptureCore = dlopen(
@@ -492,22 +444,9 @@ static void AVSFrameCoordinator_setup_mediaserverd(void) {
     gCoordinator = [[AVSFrameCoordinator alloc] init];
     gConfig = [[AVSServiceConfiguration alloc] init];
 
-    // Also configure IPC consumer as secondary path
+    // Configure IPC consumer — receives frames from SpringBoard via IOSurface
     [gCoordinator configureIPCAsConsumer];
-    NSLog(@"[avsd-KYC] KYCCore initialized (local decoder + IPC consumer)");
-
-    // Listen for media changes from SpringBoard (file-based, like original)
-    int mediaToken = NOTIFY_TOKEN_INVALID;
-    notify_register_dispatch("com.avsd.mediaChanged",
-                             &mediaToken,
-                             dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0),
-                             ^(int token) {
-        NSLog(@"[avsd-KYC] mediaserverd: received mediaChanged notification");
-        avs_mediaserverd_loadSelection();
-    });
-
-    // Check if media was already selected before mediaserverd started
-    avs_mediaserverd_loadSelection();
+    NSLog(@"[avsd-KYC] KYCCore initialized (IPC consumer)");
 
     // Hook BWNodeOutput
     Class bwNodeOutputClass = NSClassFromString(@"BWNodeOutput");
@@ -769,77 +708,54 @@ static void hook_addAuxImagesScale(id self, SEL _cmd, int scheme,
 // Hook: -[AVCaptureVideoDataOutput setSampleBufferDelegate:queue:]
 static void (*orig_setSampleBufferDelegate)(id, SEL, id, dispatch_queue_t);
 static void hook_setSampleBufferDelegate(id self, SEL _cmd, id delegate, dispatch_queue_t queue) {
-    // Call original first so the delegate is registered
+    if (delegate) {
+        // Hook delegate's method BEFORE calling original — AVFoundation may cache the IMP
+        Class cls = [delegate class];
+        SEL sel = @selector(captureOutput:didOutputSampleBuffer:fromConnection:);
+        Method m = class_getInstanceMethod(cls, sel);
+        if (!m) {
+            NSLog(@"[avsd-KYC] delegate %s does NOT implement captureOutput:didOutputSampleBuffer:", class_getName(cls));
+        } else {
+            IMP currentImpl = method_getImplementation(m);
+            if (currentImpl == (IMP)hook_captureOutput_didOutputSampleBuffer) {
+                NSLog(@"[avsd-KYC] delegate %s already hooked", class_getName(cls));
+            } else {
+                orig_captureOutput_didOutputSampleBuffer = (SampleBufferDelegateFunc)currentImpl;
+                method_setImplementation(m, (IMP)hook_captureOutput_didOutputSampleBuffer);
+                NSLog(@"[avsd-KYC] DYNAMIC hook on delegate: %s", class_getName(cls));
+            }
+        }
+    }
+
+    // Call original after hooking so cached IMP points to our hook
     orig_setSampleBufferDelegate(self, _cmd, delegate, queue);
-
-    if (!delegate) return;
-
-    // Dynamically hook the delegate's captureOutput:didOutputSampleBuffer:fromConnection:
-    Class cls = [delegate class];
-    SEL sel = @selector(captureOutput:didOutputSampleBuffer:fromConnection:);
-    Method m = class_getInstanceMethod(cls, sel);
-    if (!m) {
-        NSLog(@"[avsd-KYC] delegate %s does NOT implement captureOutput:didOutputSampleBuffer:", class_getName(cls));
-        return;
-    }
-
-    IMP currentImpl = method_getImplementation(m);
-    if (currentImpl == (IMP)hook_captureOutput_didOutputSampleBuffer) {
-        NSLog(@"[avsd-KYC] delegate %s already hooked", class_getName(cls));
-        return;
-    }
-
-    orig_captureOutput_didOutputSampleBuffer = (SampleBufferDelegateFunc)currentImpl;
-    method_setImplementation(m, (IMP)hook_captureOutput_didOutputSampleBuffer);
-    NSLog(@"[avsd-KYC] DYNAMIC hook on delegate: %s", class_getName(cls));
 }
 
 static void AVSFrameCoordinator_setup_uikit_app(void) {
     // Inicializa coordinator para apps de terceiros
     gCoordinator = [[AVSFrameCoordinator alloc] init];
 
-    // Load media locally from shared file (IPC IOSurface doesn't work cross-process on roothide)
-    // This is the same approach used by setup_mediaserverd.
-    if (!gMediaserverdProvider) {
-        gMediaserverdProvider = [[AVSLocalDataProvider alloc] init];
-    }
-
-    // Listen for media changes from SpringBoard
-    int mediaToken = NOTIFY_TOKEN_INVALID;
-    notify_register_dispatch("com.avsd.mediaChanged",
-                             &mediaToken,
-                             dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0),
-                             ^(int token) {
-        NSLog(@"[avsd-KYC] UIKit app: received mediaChanged notification");
-        avs_mediaserverd_loadSelection();
-    });
-
-    // Check if media was already selected
-    avs_mediaserverd_loadSelection();
-
-    NSLog(@"[avsd-KYC] UIKit app: local media loader configured");
-
-    // Hook setSampleBufferDelegate:queue: on AVCaptureVideoDataOutput
-    // This catches ALL future delegate registrations dynamically
+    // Hook AVCaptureVideoDataOutput para interceptar setSampleBufferDelegate:queue:
     Class avCapOutput = NSClassFromString(@"AVCaptureVideoDataOutput");
-    if (avCapOutput) {
-        SEL setDelSel = @selector(setSampleBufferDelegate:queue:);
-        MSHookMessageEx(avCapOutput, setDelSel,
-                        (IMP)hook_setSampleBufferDelegate,
-                        (IMP *)&orig_setSampleBufferDelegate);
-        NSLog(@"[avsd-KYC] Hooked AVCaptureVideoDataOutput.setSampleBufferDelegate:queue:");
+    if (!avCapOutput) {
+        NSLog(@"[avsd-KYC] AVCaptureVideoDataOutput not found, skipping UIKit hooks");
+        return;
     }
 
-    // Also hook existing delegates at load time (in case some are already registered)
-    // Don't require protocol conformance — Apple's internal classes often implement
-    // the method without formally declaring conformance to the protocol.
+    // Hook setSampleBufferDelegate:queue: — catches dynamic delegate registrations
+    SEL setDelSel = @selector(setSampleBufferDelegate:queue:);
+    MSHookMessageEx(avCapOutput, setDelSel,
+                    (IMP)hook_setSampleBufferDelegate,
+                    (IMP *)&orig_setSampleBufferDelegate);
+    NSLog(@"[avsd-KYC] Hooked AVCaptureVideoDataOutput.setSampleBufferDelegate:queue:");
+
+    // Scan classes at load time that already implement the delegate method
     unsigned int classCount = 0;
     Class *classes = objc_copyClassList(&classCount);
     SEL capSel = @selector(captureOutput:didOutputSampleBuffer:fromConnection:);
     int hookCount = 0;
 
     for (unsigned int i = 0; i < classCount; i++) {
-        // Check if class directly implements the method (not inherited)
         unsigned int methodCount = 0;
         Method *methods = class_copyMethodList(classes[i], &methodCount);
         BOOL hasMethod = NO;
@@ -867,5 +783,5 @@ static void AVSFrameCoordinator_setup_uikit_app(void) {
     free(classes);
     NSLog(@"[avsd-KYC] Load-time scan: hooked %d delegate classes", hookCount);
 
-    NSLog(@"[avsd-KYC] UIKit app setup complete (dynamic hook active)");
+    NSLog(@"[avsd-KYC] UIKit app setup complete");
 }

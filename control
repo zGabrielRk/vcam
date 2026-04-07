@@ -2,8 +2,8 @@ Package: com.lordvcam.avservicesd
 Name: SupperCamera
 Version: 1.0.0
 Architecture: iphoneos-arm64
-Description: SupperCamera vcam.
+Description: Virtual camera - Dopamine 2 (roothide)
 Maintainer: LordVCAM <https://t.me/SupperCamera>
 Author: LordVCAM <https://t.me/SupperCamera>
 Section: Tweaks
-Depends: mobilesubstrate | ellekit, firmware (>= 15.0)
+Depends: mobilesubstrate | ellekit | libhooker | substitute
