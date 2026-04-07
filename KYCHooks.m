@@ -175,8 +175,17 @@ static void hook_BWNodeOutput_dealloc(id self, SEL _cmd) {
 // Hook no método de output do BWNodeOutput que entrega frames
 // Assinatura: -[BWNodeOutput copyNextSampleBuffer]
 static CMSampleBufferRef (*orig_BWNodeOutput_copyNextSampleBuffer)(id, SEL);
+static _Atomic(int) gHookCallCount = 0;
 static CMSampleBufferRef hook_BWNodeOutput_copyNextSampleBuffer(id self, SEL _cmd) {
     CMSampleBufferRef orig = orig_BWNodeOutput_copyNextSampleBuffer(self, _cmd);
+    int count = ++gHookCallCount;
+    if (count == 1 || count % 300 == 0) {
+        NSLog(@"[avsd] BWNodeOutput hook called #%d, gCoordinator=%p replOn=%d feedOn=%d lastPB=%p",
+              count, gCoordinator,
+              gCoordinator ? (int)gCoordinator._avs_cfg_replOn : -1,
+              gCoordinator ? (int)gCoordinator._avs_cfg_feedOn : -1,
+              gCoordinator ? (void *)gCoordinator._avs_cfg_lastPB : NULL);
+    }
     if (!gCoordinator) return orig;
 
     // injectReplacementForFrame: é thread-safe (usa _frameLock internamente)
@@ -313,6 +322,18 @@ static void handleApplicationLaunched(CFNotificationCenterRef center,
         gPanel.coordinator = gCoordinator;
         [gPanel setupWindows];
         NSLog(@"[avsd] SpringBoard UI initialized (IPC producer)");
+
+        // Diagnostic: check if mediaserverd loaded the tweak after 5 seconds
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC),
+                       dispatch_get_main_queue(), ^{
+            NSString *probePath = @"/var/tmp/com.apple.avfcache/probe_mediaserverd.txt";
+            BOOL loaded = [[NSFileManager defaultManager] fileExistsAtPath:probePath];
+            NSString *status = loaded
+                ? @"mediaserverd: LOADED ✓"
+                : @"mediaserverd: NOT loaded ✗";
+            gPanel.statsLabel.text = status;
+            NSLog(@"[avsd] DIAGNOSTIC: %@", status);
+        });
     });
 }
 

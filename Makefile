@@ -5,7 +5,29 @@ include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = LordVCAM
 
-LordVCAM_FILES = Tweak.xm
+LordVCAM_FILES = \
+	Tweak.xm \
+	KYCHooks.m \
+	AVSFrameCoordinator.m \
+	AVSRenderPipeline.m \
+	AVSMediaDecoder.m \
+	AVSAudioBridge.m \
+	AVSDataProvider.m \
+	AVSFormatAnalyzer.m \
+	AVSStreamTransport.m \
+	AVSLocalTransport.m \
+	AVSMotionSynthesizer.m \
+	AVSAccessibilityOverlay.m \
+	AVSPreferencePanel.m \
+	AVSPresentationController.m \
+	AVSServiceConfiguration.m \
+	AVSDisplayLayer.m \
+	AVSWSProtocol.m \
+	AVSIPCTransport.m \
+	AVServicesd.m \
+	VCDefaultStrategy.m \
+	VCPipelineStrategy.m \
+	VCPortraitController.m
 
 LordVCAM_FRAMEWORKS = \
 	Foundation \
@@ -13,17 +35,26 @@ LordVCAM_FRAMEWORKS = \
 	AVFoundation \
 	CoreMedia \
 	CoreVideo \
+	Metal \
+	MetalKit \
+	CoreImage \
+	VideoToolbox \
+	CoreMotion \
 	Photos \
 	PhotosUI \
-	QuartzCore
+	Accelerate \
+	QuartzCore \
+	Security
 
 LordVCAM_PRIVATE_FRAMEWORKS = \
+	IOKit \
 	CMCaptureCore \
-	CMCapture
+	CMCapture \
+	FrontBoardServices
 
 LordVCAM_LIBRARIES = substrate
 
-LordVCAM_CFLAGS  = -fobjc-arc
+LordVCAM_CFLAGS  = -fobjc-arc -I$(THEOS_PROJECT_DIR) -I$(THEOS)/include
 LordVCAM_CCFLAGS = $(LordVCAM_CFLAGS)
 LordVCAM_LDFLAGS = -framework IOSurface
 
