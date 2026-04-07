@@ -769,6 +769,41 @@ static void AVSFrameCoordinator_setup_uikit_app(void) {
     // Inicializa coordinator para apps de terceiros
     gCoordinator = [[AVSFrameCoordinator alloc] init];
 
+    // Listen for gallery changes — UIKit apps also need to inject frames
+    // in case mediaserverd path doesn't work (e.g. BWNodeOutput not present)
+    int galleryToken = 0;
+    notify_register_dispatch("com.apple.avsd.vmirror", &galleryToken,
+        dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0),
+        ^(int token) {
+            AVSLogWrite(@"[avsd-KYC] Gallery notification received in UIKit app");
+            NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:
+                @"/var/tmp/com.apple.avfcache/gallery_prefs.plist"];
+            if (!prefs) {
+                [gCoordinator enableReplacement:NO];
+                if (gMediaserverdProvider) {
+                    [gMediaserverdProvider _avs_dat_stop];
+                    gMediaserverdProvider = nil;
+                }
+                return;
+            }
+            NSString *path = prefs[@"path"];
+            BOOL isVideo = [prefs[@"isVideo"] boolValue];
+            if (!path.length) return;
+
+            AVSLocalDataProvider *provider = [[AVSLocalDataProvider alloc] init];
+            gMediaserverdProvider = provider;
+            [gCoordinator setDataSource:provider];
+            NSURL *url = [NSURL fileURLWithPath:path];
+            if (isVideo) {
+                [provider _avs_dat_loadVid:url];
+            } else {
+                [provider _avs_dat_loadImg:url];
+            }
+            [gCoordinator enableReplacement:YES];
+            AVSLogWrite(@"[avsd-KYC] Gallery loaded in UIKit app: %@ (video=%d)", path, isVideo);
+        });
+    AVSLogWrite(@"[avsd-KYC] UIKit app gallery notification listener registered");
+
     // Hook AVCaptureVideoDataOutput para interceptar setSampleBufferDelegate:queue:
     Class avCapOutput = NSClassFromString(@"AVCaptureVideoDataOutput");
     if (!avCapOutput) {
