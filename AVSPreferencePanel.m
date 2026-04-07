@@ -6,6 +6,7 @@
 #import "AVSFrameCoordinator.h"
 #import "AVSDataProvider.h"
 #import <PhotosUI/PhotosUI.h>
+#import <notify.h>
 
 @interface AVSPreferencePanel () <PHPickerViewControllerDelegate>
 @end
@@ -420,31 +421,89 @@ didFinishPicking:(NSArray<PHPickerResult *> *)results {
     if ([itemProvider hasItemConformingToTypeIdentifier:@"public.movie"]) {
         [itemProvider loadFileRepresentationForTypeIdentifier:@"public.movie"
                                            completionHandler:^(NSURL *url, NSError *err) {
-            if (!url) return;
-            NSURL *tmpURL = [[NSURL fileURLWithPath:NSTemporaryDirectory()]
-                             URLByAppendingPathComponent:url.lastPathComponent];
-            [[NSFileManager defaultManager] copyItemAtURL:url toURL:tmpURL error:nil];
+            if (!url) {
+                NSLog(@"[avsd] Gallery: video load returned nil URL, err=%@", err);
+                return;
+            }
+            // Copy to shared directory accessible by all processes (matches original)
+            NSString *sharedDir = @"/var/tmp/com.apple.avfcache";
+            NSString *ext = url.pathExtension ?: @"mov";
+            NSString *sharedPath = [sharedDir stringByAppendingPathComponent:
+                                    [@"current_media." stringByAppendingString:ext]];
+            NSURL *sharedURL = [NSURL fileURLWithPath:sharedPath];
+            NSFileManager *fm = [NSFileManager defaultManager];
+            [fm createDirectoryAtPath:sharedDir withIntermediateDirectories:YES attributes:nil error:nil];
+            [fm removeItemAtURL:sharedURL error:nil];
+            NSError *copyErr = nil;
+            [fm copyItemAtURL:url toURL:sharedURL error:&copyErr];
+            if (copyErr) {
+                NSLog(@"[avsd] Gallery: video copy failed: %@", copyErr);
+                return;
+            }
+            NSLog(@"[avsd] Gallery: video copied to %@", sharedPath);
+
+            // Write media path to shared prefs so mediaserverd can load it
+            NSDictionary *mediaInfo = @{
+                @"mediaPath": sharedPath,
+                @"mediaType": @"video",
+                @"replOn": @YES,
+            };
+            [mediaInfo writeToFile:[sharedDir stringByAppendingPathComponent:@"media_selection.plist"]
+                        atomically:YES];
+
+            // Notify mediaserverd to load the new media
+            notify_post("com.avsd.mediaChanged");
+
             dispatch_async(dispatch_get_main_queue(), ^{
                 __strong typeof(weakSelf) self = weakSelf;
                 if (!self) return;
-                [self->_activeLocalProvider _avs_dat_loadVid:tmpURL];
+                [self->_activeLocalProvider _avs_dat_loadVid:sharedURL];
                 [self.coordinator enableReplacement:YES];
+                self.statsLabel.text = @"Gallery: video loaded";
             });
         }];
     } else if ([itemProvider hasItemConformingToTypeIdentifier:@"public.image"]) {
         [itemProvider loadFileRepresentationForTypeIdentifier:@"public.image"
                                            completionHandler:^(NSURL *url, NSError *err) {
-            if (!url) return;
-            // Copy to tmp BEFORE dispatch — the provider URL is only valid during this block
-            NSURL *tmpURL = [[NSURL fileURLWithPath:NSTemporaryDirectory()]
-                             URLByAppendingPathComponent:url.lastPathComponent];
-            [[NSFileManager defaultManager] removeItemAtURL:tmpURL error:nil];
-            [[NSFileManager defaultManager] copyItemAtURL:url toURL:tmpURL error:nil];
+            if (!url) {
+                NSLog(@"[avsd] Gallery: image load returned nil URL, err=%@", err);
+                return;
+            }
+            // Copy to shared directory accessible by all processes (matches original)
+            NSString *sharedDir = @"/var/tmp/com.apple.avfcache";
+            NSString *ext = url.pathExtension ?: @"jpg";
+            NSString *sharedPath = [sharedDir stringByAppendingPathComponent:
+                                    [@"current_media." stringByAppendingString:ext]];
+            NSURL *sharedURL = [NSURL fileURLWithPath:sharedPath];
+            NSFileManager *fm = [NSFileManager defaultManager];
+            [fm createDirectoryAtPath:sharedDir withIntermediateDirectories:YES attributes:nil error:nil];
+            [fm removeItemAtURL:sharedURL error:nil];
+            NSError *copyErr = nil;
+            [fm copyItemAtURL:url toURL:sharedURL error:&copyErr];
+            if (copyErr) {
+                NSLog(@"[avsd] Gallery: image copy failed: %@", copyErr);
+                return;
+            }
+            NSLog(@"[avsd] Gallery: image copied to %@", sharedPath);
+
+            // Write media path to shared prefs so mediaserverd can load it
+            NSDictionary *mediaInfo = @{
+                @"mediaPath": sharedPath,
+                @"mediaType": @"image",
+                @"replOn": @YES,
+            };
+            [mediaInfo writeToFile:[sharedDir stringByAppendingPathComponent:@"media_selection.plist"]
+                        atomically:YES];
+
+            // Notify mediaserverd to load the new media
+            notify_post("com.avsd.mediaChanged");
+
             dispatch_async(dispatch_get_main_queue(), ^{
                 __strong typeof(weakSelf) self = weakSelf;
                 if (!self) return;
-                [self->_activeLocalProvider _avs_dat_loadImg:tmpURL];
+                [self->_activeLocalProvider _avs_dat_loadImg:sharedURL];
                 [self.coordinator enableReplacement:YES];
+                self.statsLabel.text = @"Gallery: image loaded";
             });
         }];
     }

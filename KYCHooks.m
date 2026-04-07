@@ -23,6 +23,8 @@
 #import "AVSPreferencePanel.h"
 #import "AVSServiceConfiguration.h"
 #import "AVSWSProtocol.h"
+#import "AVSDataProvider.h"
+#import <notify.h>
 #import "AVSIPCTransport.h"
 
 // -----------------------------------------------------------------------
@@ -404,6 +406,53 @@ static void avs_ctor(void) {
 // -----------------------------------------------------------------------
 // Setup para mediaserverd
 // -----------------------------------------------------------------------
+// Local data provider for mediaserverd (loads media from shared directory)
+// -----------------------------------------------------------------------
+static AVSLocalDataProvider *gMediaserverdProvider = nil;
+
+static void avs_mediaserverd_loadSelection(void) {
+    NSString *selPath = @"/var/tmp/com.apple.avfcache/media_selection.plist";
+    NSDictionary *sel = [NSDictionary dictionaryWithContentsOfFile:selPath];
+    if (!sel) {
+        NSLog(@"[avsd-KYC] mediaserverd: no media_selection.plist found");
+        return;
+    }
+
+    NSString *mediaPath = sel[@"mediaPath"];
+    NSString *mediaType = sel[@"mediaType"];
+    BOOL replOn = [sel[@"replOn"] boolValue];
+
+    if (!mediaPath || ![[NSFileManager defaultManager] fileExistsAtPath:mediaPath]) {
+        NSLog(@"[avsd-KYC] mediaserverd: media file not found at %@", mediaPath);
+        return;
+    }
+
+    NSLog(@"[avsd-KYC] mediaserverd: loading %@ media from %@", mediaType, mediaPath);
+
+    // Create or reuse local data provider
+    if (!gMediaserverdProvider) {
+        gMediaserverdProvider = [[AVSLocalDataProvider alloc] init];
+    } else {
+        [gMediaserverdProvider _avs_dat_stop];
+    }
+
+    // Set as data source (this wires up _avs_cfg_onDec callback)
+    [gCoordinator setDataSource:gMediaserverdProvider];
+
+    NSURL *mediaURL = [NSURL fileURLWithPath:mediaPath];
+    if ([mediaType isEqualToString:@"video"]) {
+        [gMediaserverdProvider _avs_dat_loadVid:mediaURL];
+    } else {
+        [gMediaserverdProvider _avs_dat_loadImg:mediaURL];
+    }
+
+    if (replOn) {
+        gCoordinator._avs_cfg_replOn = YES;
+        gCoordinator._avs_cfg_feedOn = YES;
+    }
+    NSLog(@"[avsd-KYC] mediaserverd: media loaded, replOn=%d feedOn=%d", replOn, replOn);
+}
+
 static void AVSFrameCoordinator_setup_mediaserverd(void) {
     // Carrega frameworks privados via dlopen
     void *cmCaptureCore = dlopen(
@@ -415,11 +464,26 @@ static void AVSFrameCoordinator_setup_mediaserverd(void) {
     NSLog(@"[avsd-KYC] dlopen complete");
     (void)cmCaptureCore; (void)cmCapture; (void)frontBoard;
 
-    // Inicializa coordinator global + IPC consumer
+    // Inicializa coordinator global
     gCoordinator = [[AVSFrameCoordinator alloc] init];
     gConfig = [[AVSServiceConfiguration alloc] init];
+
+    // Also configure IPC consumer as secondary path
     [gCoordinator configureIPCAsConsumer];
-    NSLog(@"[avsd-KYC] KYCCore initialized (IPC consumer)");
+    NSLog(@"[avsd-KYC] KYCCore initialized (local decoder + IPC consumer)");
+
+    // Listen for media changes from SpringBoard (file-based, like original)
+    int mediaToken = NOTIFY_TOKEN_INVALID;
+    notify_register_dispatch("com.avsd.mediaChanged",
+                             &mediaToken,
+                             dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0),
+                             ^(int token) {
+        NSLog(@"[avsd-KYC] mediaserverd: received mediaChanged notification");
+        avs_mediaserverd_loadSelection();
+    });
+
+    // Check if media was already selected before mediaserverd started
+    avs_mediaserverd_loadSelection();
 
     // Hook BWNodeOutput
     Class bwNodeOutputClass = NSClassFromString(@"BWNodeOutput");
