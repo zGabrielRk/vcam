@@ -161,7 +161,7 @@ static void hook_captureDelegate(id self, SEL _cmd, id output,
 @property (nonatomic, strong) UIWindow *btnWindow;
 @property (nonatomic, strong) UIButton *floatBtn;
 @property (nonatomic, strong) UIWindow *pickerWindow;
-@property (nonatomic, strong) CVPixelBufferRef sharedPB;
+@property (nonatomic) CVPixelBufferRef sharedPB;
 @property (nonatomic) int galleryToken;
 @property (nonatomic) int stateToken;
 @property (nonatomic, strong) dispatch_source_t videoTimer;
@@ -177,7 +177,7 @@ static VCamPanel *gPanel = nil;
 @implementation VCamPanel
 
 - (void)dealloc {
-    if (_sharedPB) CVPixelBufferRelease(_sharedPB);
+    if (self.sharedPB) CVPixelBufferRelease(self.sharedPB);
 }
 
 - (void)setup {
@@ -472,9 +472,9 @@ static VCamPanel *gPanel = nil;
     }
 
     // Keep the pixel buffer alive (IOSurface stays valid while CVPixelBuffer is retained)
-    CVPixelBufferRef old = _sharedPB;
+    CVPixelBufferRef old = self.sharedPB;
     CVPixelBufferRetain(pb);
-    _sharedPB = pb;
+    self.sharedPB = pb;
     if (old) CVPixelBufferRelease(old);
 
     uint32_t sid = IOSurfaceGetID(surface);
