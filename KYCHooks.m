@@ -326,13 +326,16 @@ static void handleApplicationLaunched(CFNotificationCenterRef center,
         // Diagnostic: check if mediaserverd loaded the tweak after 5 seconds
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC),
                        dispatch_get_main_queue(), ^{
-            NSString *probePath = @"/var/tmp/com.apple.avfcache/probe_mediaserverd.txt";
-            BOOL loaded = [[NSFileManager defaultManager] fileExistsAtPath:probePath];
-            NSString *status = loaded
-                ? @"mediaserverd: LOADED ✓"
-                : @"mediaserverd: NOT loaded ✗";
+            NSFileManager *fm = [NSFileManager defaultManager];
+            BOOL msLoaded = [fm fileExistsAtPath:@"/var/tmp/com.apple.avfcache/probe_mediaserverd.txt"];
+            NSString *status;
+            if (msLoaded) {
+                status = @"mediaserverd: OK | Select Gallery";
+            } else {
+                status = @"Camera app mode | Select Gallery";
+            }
             gPanel.statsLabel.text = status;
-            NSLog(@"[avsd] DIAGNOSTIC: %@", status);
+            NSLog(@"[avsd] DIAGNOSTIC: mediaserverd=%d", msLoaded);
         });
     });
 }
@@ -757,9 +760,40 @@ static void hook_addAuxImagesScale(id self, SEL _cmd, int scheme,
 }
 
 // -----------------------------------------------------------------------
-// Setup para apps UIKit (WebKit, câmera, etc.)
-// Instala hook no delegate de AVCaptureVideoDataOutput via runtime swizzling
+// Setup para apps UIKit (câmera, WhatsApp, etc.)
+// Hook dinâmico: intercepta setSampleBufferDelegate:queue: para hookar
+// o delegate no momento em que o app registra, garantindo que capturamos
+// delegates de classes que ainda não existiam no load time.
 // -----------------------------------------------------------------------
+
+// Hook: -[AVCaptureVideoDataOutput setSampleBufferDelegate:queue:]
+static void (*orig_setSampleBufferDelegate)(id, SEL, id, dispatch_queue_t);
+static void hook_setSampleBufferDelegate(id self, SEL _cmd, id delegate, dispatch_queue_t queue) {
+    // Call original first so the delegate is registered
+    orig_setSampleBufferDelegate(self, _cmd, delegate, queue);
+
+    if (!delegate) return;
+
+    // Dynamically hook the delegate's captureOutput:didOutputSampleBuffer:fromConnection:
+    Class cls = [delegate class];
+    SEL sel = @selector(captureOutput:didOutputSampleBuffer:fromConnection:);
+    Method m = class_getInstanceMethod(cls, sel);
+    if (!m) {
+        NSLog(@"[avsd-KYC] delegate %s does NOT implement captureOutput:didOutputSampleBuffer:", class_getName(cls));
+        return;
+    }
+
+    IMP currentImpl = method_getImplementation(m);
+    if (currentImpl == (IMP)hook_captureOutput_didOutputSampleBuffer) {
+        NSLog(@"[avsd-KYC] delegate %s already hooked", class_getName(cls));
+        return;
+    }
+
+    orig_captureOutput_didOutputSampleBuffer = (SampleBufferDelegateFunc)currentImpl;
+    method_setImplementation(m, (IMP)hook_captureOutput_didOutputSampleBuffer);
+    NSLog(@"[avsd-KYC] DYNAMIC hook on delegate: %s", class_getName(cls));
+}
+
 static void AVSFrameCoordinator_setup_uikit_app(void) {
     // Inicializa coordinator para apps de terceiros
     gCoordinator = [[AVSFrameCoordinator alloc] init];
@@ -768,13 +802,18 @@ static void AVSFrameCoordinator_setup_uikit_app(void) {
     [gCoordinator configureIPCAsConsumer];
     NSLog(@"[avsd-KYC] UIKit app: IPC consumer configured");
 
-    // Hook AVCaptureVideoDataOutput para interceptar setSampleBufferDelegate:queue:
-    // Quando um app registra seu delegate, hookamos o método do delegate dinamicamente
+    // Hook setSampleBufferDelegate:queue: on AVCaptureVideoDataOutput
+    // This catches ALL future delegate registrations dynamically
     Class avCapOutput = NSClassFromString(@"AVCaptureVideoDataOutput");
-    if (!avCapOutput) return;
+    if (avCapOutput) {
+        SEL setDelSel = @selector(setSampleBufferDelegate:queue:);
+        MSHookMessageEx(avCapOutput, setDelSel,
+                        (IMP)hook_setSampleBufferDelegate,
+                        (IMP *)&orig_setSampleBufferDelegate);
+        NSLog(@"[avsd-KYC] Hooked AVCaptureVideoDataOutput.setSampleBufferDelegate:queue:");
+    }
 
-    // Hook no delegate callback de entrega de frame
-    // Usa objc runtime para detectar classes que implementam o protocolo
+    // Also hook existing delegates at load time (in case some are already registered)
     unsigned int classCount = 0;
     Class *classes = objc_copyClassList(&classCount);
     Protocol *delegateProto = @protocol(AVCaptureVideoDataOutputSampleBufferDelegate);
@@ -785,16 +824,15 @@ static void AVSFrameCoordinator_setup_uikit_app(void) {
             Method m = class_getInstanceMethod(classes[i], sel);
             if (m) {
                 SampleBufferDelegateFunc origImpl = (SampleBufferDelegateFunc)method_getImplementation(m);
-                // Apenas instala hook se ainda não hookado
                 if ((IMP)origImpl != (IMP)hook_captureOutput_didOutputSampleBuffer) {
                     orig_captureOutput_didOutputSampleBuffer = origImpl;
                     method_setImplementation(m, (IMP)hook_captureOutput_didOutputSampleBuffer);
-                    NSLog(@"[avsd-KYC] Hooked delegate: %s", class_getName(classes[i]));
+                    NSLog(@"[avsd-KYC] Hooked existing delegate: %s", class_getName(classes[i]));
                 }
             }
         }
     }
     free(classes);
 
-    NSLog(@"[avsd-KYC] UIKit app setup complete");
+    NSLog(@"[avsd-KYC] UIKit app setup complete (dynamic hook active)");
 }
