@@ -66,8 +66,8 @@ static AVSLocalDataProvider *gMediaserverdProvider = nil;
 // Ponteiros originais de funções hookadas
 // -----------------------------------------------------------------------
 
-// BWNodeOutput
-static void (*orig_BWNodeOutput_dealloc)(id self, SEL _cmd);
+// BWNodeOutput — dealloc hook REMOVED: it corrupts BWNode dealloc chain
+// and causes KERN_INVALID_ADDRESS crashes in mediaserverd
 
 // AVCaptureConnection - método principal de entrega de frame
 typedef void (*CopyNextFrameFunc)(id, SEL, CMSampleBufferRef, int);
@@ -166,11 +166,10 @@ static void avs_setup_crash_handler(void) {
 // -----------------------------------------------------------------------
 // Hook: BWNodeOutput - ponto de injeção na pipeline de câmera
 // BWNodeOutput é o nó de saída do grafo de captura em mediaserverd
+// NOTE: dealloc hook was REMOVED — hooking dealloc on BWNodeOutput corrupts
+// the BWNode inheritance chain and crashes mediaserverd during graph teardown
+// (KERN_INVALID_ADDRESS at 0x20 in objc_release during [BWNode dealloc])
 // -----------------------------------------------------------------------
-static void hook_BWNodeOutput_dealloc(id self, SEL _cmd) {
-    NSLog(@"[avsd] BWNodeOutput dealloc");
-    orig_BWNodeOutput_dealloc(self, _cmd);
-}
 
 // Hook no método de output do BWNodeOutput que entrega frames
 // Assinatura: -[BWNodeOutput copyNextSampleBuffer]
@@ -196,6 +195,24 @@ static CMSampleBufferRef hook_BWNodeOutput_copyNextSampleBuffer(id self, SEL _cm
     return replacement; // já retido por injectReplacementForFrame:
 }
 
+// Hook: emitSampleBuffer: — alternative injection point in BWNode pipeline
+// Some iOS versions route frames through emit instead of copyNext
+static void (*orig_BWNodeOutput_emitSampleBuffer)(id, SEL, CMSampleBufferRef);
+static void hook_BWNodeOutput_emitSampleBuffer(id self, SEL _cmd, CMSampleBufferRef sampleBuffer) {
+    if (!gCoordinator || !sampleBuffer) {
+        orig_BWNodeOutput_emitSampleBuffer(self, _cmd, sampleBuffer);
+        return;
+    }
+
+    CMSampleBufferRef replacement = [gCoordinator injectReplacementForFrame:sampleBuffer];
+    if (replacement != sampleBuffer) {
+        orig_BWNodeOutput_emitSampleBuffer(self, _cmd, replacement);
+        CFRelease(replacement);
+    } else {
+        orig_BWNodeOutput_emitSampleBuffer(self, _cmd, sampleBuffer);
+    }
+}
+
 // -----------------------------------------------------------------------
 // Hook: AVCaptureConnection - injeção de frame em apps com câmera
 //
@@ -213,8 +230,10 @@ static CMSampleBufferRef hook_BWNodeOutput_copyNextSampleBuffer(id self, SEL _cm
 static _Atomic(int) gFrameCounter = 0;
 
 // Hook no callback de entrega de frame ao app
+// Each delegate class has its own original IMP stored via objc associated objects
+// to avoid the single-global-overwrite bug
 typedef void (*SampleBufferDelegateFunc)(id, SEL, id, CMSampleBufferRef, id);
-static SampleBufferDelegateFunc orig_captureOutput_didOutputSampleBuffer;
+static const char kOrigDelegateIMPKey = 0;
 
 static _Atomic(int) gDelegateHookEntryCount = 0;
 static void hook_captureOutput_didOutputSampleBuffer(
@@ -231,8 +250,21 @@ static void hook_captureOutput_didOutputSampleBuffer(
               gCoordinator ? (int)gCoordinator._avs_cfg_feedOn : -1,
               gCoordinator ? (void *)gCoordinator._avs_cfg_lastPB : NULL);
     }
+
+    // Retrieve the original IMP for THIS class (stored per-class via associated objects)
+    NSValue *origVal = objc_getAssociatedObject([self class], &kOrigDelegateIMPKey);
+    SampleBufferDelegateFunc origFunc = NULL;
+    if (origVal) {
+        [origVal getValue:&origFunc];
+    }
+    if (!origFunc) {
+        // Fallback: should not happen, but just call through msgSend
+        NSLog(@"[avsd] WARNING: no orig IMP for delegate %s", class_getName([self class]));
+        return;
+    }
+
     if (!gCoordinator || !gCoordinator._avs_cfg_replOn) {
-        orig_captureOutput_didOutputSampleBuffer(self, _cmd, captureOutput, sampleBuffer, connection);
+        origFunc(self, _cmd, captureOutput, sampleBuffer, connection);
         return;
     }
 
@@ -246,44 +278,24 @@ static void hook_captureOutput_didOutputSampleBuffer(
         size_t w = CVPixelBufferGetWidth(CMSampleBufferGetImageBuffer(sampleBuffer));
         size_t h = CVPixelBufferGetHeight(CMSampleBufferGetImageBuffer(sampleBuffer));
         NSLog(@"[avsd] [WK] #%d SKIP double-inj %zux%zu", n, w, h);
-        orig_captureOutput_didOutputSampleBuffer(self, _cmd, captureOutput, sampleBuffer, connection);
+        origFunc(self, _cmd, captureOutput, sampleBuffer, connection);
         return;
     }
 
     // Obtém frame substituto de forma thread-safe
     CMSampleBufferRef replacement = [gCoordinator injectReplacementForFrame:sampleBuffer];
     if (replacement == sampleBuffer) {
-        CVImageBufferRef imgBuf = CMSampleBufferGetImageBuffer(sampleBuffer);
-        size_t w = CVPixelBufferGetWidth(imgBuf);
-        size_t h = CVPixelBufferGetHeight(imgBuf);
-        NSLog(@"[avsd] [WK] #%d ORIG (no source at all) %zux%zu", n, w, h);
-        orig_captureOutput_didOutputSampleBuffer(self, _cmd, captureOutput, sampleBuffer, connection);
+        origFunc(self, _cmd, captureOutput, sampleBuffer, connection);
         return;
     }
 
-    CVImageBufferRef dstImg = CMSampleBufferGetImageBuffer(sampleBuffer);
-    CVImageBufferRef srcImg = CMSampleBufferGetImageBuffer(replacement);
-
-    size_t dstW = CVPixelBufferGetWidth(dstImg);
-    size_t dstH = CVPixelBufferGetHeight(dstImg);
-    size_t srcW = CVPixelBufferGetWidth(srcImg);
-
-    // Fast path: VT (VideoToolbox) para escalar/converter
-    // [avsd-AUDIT] #N dst=WxH(ar) src=WxH(ar) crop=N% front=N path=VT
-    float dstAR = (float)dstW / dstH;
-    float srcAR = (float)srcW / CVPixelBufferGetHeight(srcImg);
-    BOOL isFront = NO; // detectado via AVCaptureDevicePosition
-    NSLog(@"[avsd-AUDIT] #%d dst=%zux%zu(%.2f) src=%zux%zu(%.2f) crop=%.0f%% front=%d path=VT",
-          n, dstW, dstH, dstAR, srcW, CVPixelBufferGetHeight(srcImg), srcAR,
-          100.0f * MIN(dstAR/srcAR, srcAR/dstAR), isFront ? 1 : 0);
-
-    // Marca como injetado
+    // Marca como injetado (reuse bearer from double-injection check above)
     CMSetAttachment(bearer, CFSTR("_avs_inj"), kCFBooleanTrue,
                     kCMAttachmentMode_ShouldPropagate);
 
     // Entrega frame substituto
-    orig_captureOutput_didOutputSampleBuffer(self, _cmd, captureOutput, replacement, connection);
-    CFRelease(replacement); // injectReplacementForFrame: retorna com retain
+    origFunc(self, _cmd, captureOutput, replacement, connection);
+    CFRelease(replacement);
 }
 
 // -----------------------------------------------------------------------
@@ -419,8 +431,8 @@ static void avs_ctor(void) {
          createDirectoryAtPath:@"/var/tmp/com.apple.avfcache"
      withIntermediateDirectories:YES attributes:nil error:nil];
 
-        // Setup crash handler
-        avs_setup_crash_handler();
+        // NOTE: custom crash handler removed — it interferes with Apple's crash reporter
+        // and can cause issues in mediaserverd. Use IPS crash reports instead.
 
         // Probe de diagnóstico
         avs_write_probe(processName);
@@ -554,14 +566,9 @@ static void AVSFrameCoordinator_setup_mediaserverd(void) {
         NSLog(@"[avsd-KYC] DIAG written to %@", diagPath);
     }
 
-    // Hook BWNodeOutput
+    // Hook BWNodeOutput — only copyNextSampleBuffer (NOT dealloc!)
     Class bwNodeOutputClass = NSClassFromString(@"BWNodeOutput");
     if (bwNodeOutputClass) {
-        MSHookMessageEx(bwNodeOutputClass,
-                        sel_registerName("dealloc"),
-                        (IMP)hook_BWNodeOutput_dealloc,
-                        (IMP *)&orig_BWNodeOutput_dealloc);
-
         SEL copyNextSel = NSSelectorFromString(@"copyNextSampleBuffer");
         if ([bwNodeOutputClass instancesRespondToSelector:copyNextSel]) {
             MSHookMessageEx(bwNodeOutputClass,
@@ -570,16 +577,17 @@ static void AVSFrameCoordinator_setup_mediaserverd(void) {
                             (IMP *)&orig_BWNodeOutput_copyNextSampleBuffer);
             NSLog(@"[avsd-KYC] BWNodeOutput.copyNextSampleBuffer hooked OK");
         } else {
-            NSLog(@"[avsd-KYC] WARNING: BWNodeOutput exists but copyNextSampleBuffer NOT found!");
-            // List all methods on BWNodeOutput
-            unsigned int mc = 0;
-            Method *methods = class_copyMethodList(bwNodeOutputClass, &mc);
-            NSMutableArray *sels = [NSMutableArray array];
-            for (unsigned int i = 0; i < mc; i++) {
-                [sels addObject:NSStringFromSelector(method_getName(methods[i]))];
-            }
-            free(methods);
-            NSLog(@"[avsd-KYC] BWNodeOutput methods: %@", sels);
+            NSLog(@"[avsd-KYC] WARNING: BWNodeOutput.copyNextSampleBuffer NOT found");
+        }
+
+        // Also hook emitSampleBuffer: — some iOS versions use this path
+        SEL emitSel = NSSelectorFromString(@"emitSampleBuffer:");
+        if ([bwNodeOutputClass instancesRespondToSelector:emitSel]) {
+            MSHookMessageEx(bwNodeOutputClass,
+                            emitSel,
+                            (IMP)hook_BWNodeOutput_emitSampleBuffer,
+                            (IMP *)&orig_BWNodeOutput_emitSampleBuffer);
+            NSLog(@"[avsd-KYC] BWNodeOutput.emitSampleBuffer: hooked OK");
         }
         NSLog(@"[avsd-KYC] KYCMetadata initialized");
     } else {
@@ -831,27 +839,29 @@ static void hook_addAuxImagesScale(id self, SEL _cmd, int scheme,
 
 // Hook: -[AVCaptureVideoDataOutput setSampleBufferDelegate:queue:]
 static void (*orig_setSampleBufferDelegate)(id, SEL, id, dispatch_queue_t);
+
+// Helper: hook a delegate class's captureOutput:didOutputSampleBuffer:fromConnection:
+// Stores original IMP as associated object on the CLASS so each class has its own orig
+static void _hookDelegateClass(Class cls) {
+    SEL sel = @selector(captureOutput:didOutputSampleBuffer:fromConnection:);
+    Method m = class_getInstanceMethod(cls, sel);
+    if (!m) return;
+    IMP currentImpl = method_getImplementation(m);
+    if (currentImpl == (IMP)hook_captureOutput_didOutputSampleBuffer) return; // already hooked
+
+    // Store original IMP on the class object via associated object
+    SampleBufferDelegateFunc origFunc = (SampleBufferDelegateFunc)currentImpl;
+    NSValue *val = [NSValue valueWithBytes:&origFunc objCType:@encode(SampleBufferDelegateFunc)];
+    objc_setAssociatedObject(cls, &kOrigDelegateIMPKey, val, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    method_setImplementation(m, (IMP)hook_captureOutput_didOutputSampleBuffer);
+    NSLog(@"[avsd-KYC] Hooked delegate: %s", class_getName(cls));
+}
+
 static void hook_setSampleBufferDelegate(id self, SEL _cmd, id delegate, dispatch_queue_t queue) {
     if (delegate) {
-        // Hook delegate's method BEFORE calling original — AVFoundation may cache the IMP
-        Class cls = [delegate class];
-        SEL sel = @selector(captureOutput:didOutputSampleBuffer:fromConnection:);
-        Method m = class_getInstanceMethod(cls, sel);
-        if (!m) {
-            NSLog(@"[avsd-KYC] delegate %s does NOT implement captureOutput:didOutputSampleBuffer:", class_getName(cls));
-        } else {
-            IMP currentImpl = method_getImplementation(m);
-            if (currentImpl == (IMP)hook_captureOutput_didOutputSampleBuffer) {
-                NSLog(@"[avsd-KYC] delegate %s already hooked", class_getName(cls));
-            } else {
-                orig_captureOutput_didOutputSampleBuffer = (SampleBufferDelegateFunc)currentImpl;
-                method_setImplementation(m, (IMP)hook_captureOutput_didOutputSampleBuffer);
-                NSLog(@"[avsd-KYC] DYNAMIC hook on delegate: %s", class_getName(cls));
-            }
-        }
+        _hookDelegateClass([delegate class]);
     }
-
-    // Call original after hooking so cached IMP points to our hook
     orig_setSampleBufferDelegate(self, _cmd, delegate, queue);
 }
 
@@ -927,16 +937,8 @@ static void AVSFrameCoordinator_setup_uikit_app(void) {
         free(methods);
 
         if (hasMethod) {
-            Method m = class_getInstanceMethod(classes[i], capSel);
-            if (m) {
-                SampleBufferDelegateFunc origImpl = (SampleBufferDelegateFunc)method_getImplementation(m);
-                if ((IMP)origImpl != (IMP)hook_captureOutput_didOutputSampleBuffer) {
-                    orig_captureOutput_didOutputSampleBuffer = origImpl;
-                    method_setImplementation(m, (IMP)hook_captureOutput_didOutputSampleBuffer);
-                    NSLog(@"[avsd-KYC] Hooked existing delegate: %s", class_getName(classes[i]));
-                    hookCount++;
-                }
-            }
+            _hookDelegateClass(classes[i]);
+            hookCount++;
         }
     }
     free(classes);
