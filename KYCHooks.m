@@ -216,12 +216,21 @@ static _Atomic(int) gFrameCounter = 0;
 typedef void (*SampleBufferDelegateFunc)(id, SEL, id, CMSampleBufferRef, id);
 static SampleBufferDelegateFunc orig_captureOutput_didOutputSampleBuffer;
 
+static _Atomic(int) gDelegateHookEntryCount = 0;
 static void hook_captureOutput_didOutputSampleBuffer(
     id self, SEL _cmd,
     id captureOutput,
     CMSampleBufferRef sampleBuffer,
     id connection
 ) {
+    int entry = ++gDelegateHookEntryCount;
+    if (entry == 1 || entry % 300 == 0) {
+        NSLog(@"[avsd] delegate hook called #%d coord=%p replOn=%d feedOn=%d lastPB=%p",
+              entry, gCoordinator,
+              gCoordinator ? (int)gCoordinator._avs_cfg_replOn : -1,
+              gCoordinator ? (int)gCoordinator._avs_cfg_feedOn : -1,
+              gCoordinator ? (void *)gCoordinator._avs_cfg_lastPB : NULL);
+    }
     if (!gCoordinator || !gCoordinator._avs_cfg_replOn) {
         orig_captureOutput_didOutputSampleBuffer(self, _cmd, captureOutput, sampleBuffer, connection);
         return;
@@ -482,6 +491,46 @@ static void AVSFrameCoordinator_setup_mediaserverd(void) {
         });
     AVSLogWrite(@"[avsd-KYC] Gallery notification listener registered");
 
+    // Diagnostic: scan for camera pipeline classes in mediaserverd
+    {
+        NSArray *classesToProbe = @[
+            @"BWNodeOutput", @"BWNode", @"BWNodeInput",
+            @"BWFigCaptureDevice", @"BWFigCaptureStream",
+            @"BWSourceNode", @"BWCameraSourceNode",
+            @"FigCaptureSource", @"FigCaptureStream",
+            @"FigCaptureSourceNode", @"FigCaptureDevice",
+            @"FigCaptureClientSessionMonitor",
+            @"BWPhotoEncoderNode", @"BWStillImageScalerNode",
+            @"CMCaptureDevice", @"CMCaptureSession",
+            @"CMCaptureOutput", @"CMCaptureVideoDataOutput",
+        ];
+        NSMutableArray *found = [NSMutableArray array];
+        NSMutableArray *missing = [NSMutableArray array];
+        for (NSString *name in classesToProbe) {
+            if (NSClassFromString(name)) {
+                [found addObject:name];
+            } else {
+                [missing addObject:name];
+            }
+        }
+        NSLog(@"[avsd-KYC] DIAG mediaserverd classes FOUND: %@", found);
+        NSLog(@"[avsd-KYC] DIAG mediaserverd classes MISSING: %@", missing);
+
+        // Also scan for any class containing "Node" or "Output" or "Capture"
+        unsigned int classCount = 0;
+        Class *allClasses = objc_copyClassList(&classCount);
+        NSMutableArray *nodeClasses = [NSMutableArray array];
+        for (unsigned int i = 0; i < classCount && nodeClasses.count < 40; i++) {
+            NSString *cn = NSStringFromClass(allClasses[i]);
+            if ([cn hasPrefix:@"BW"] || [cn hasPrefix:@"FigCapture"] ||
+                [cn hasPrefix:@"CMCapture"]) {
+                [nodeClasses addObject:cn];
+            }
+        }
+        free(allClasses);
+        NSLog(@"[avsd-KYC] DIAG BW/FigCapture/CMCapture classes: %@", nodeClasses);
+    }
+
     // Hook BWNodeOutput
     Class bwNodeOutputClass = NSClassFromString(@"BWNodeOutput");
     if (bwNodeOutputClass) {
@@ -491,11 +540,27 @@ static void AVSFrameCoordinator_setup_mediaserverd(void) {
                         (IMP *)&orig_BWNodeOutput_dealloc);
 
         SEL copyNextSel = NSSelectorFromString(@"copyNextSampleBuffer");
-        MSHookMessageEx(bwNodeOutputClass,
-                        copyNextSel,
-                        (IMP)hook_BWNodeOutput_copyNextSampleBuffer,
-                        (IMP *)&orig_BWNodeOutput_copyNextSampleBuffer);
+        if ([bwNodeOutputClass instancesRespondToSelector:copyNextSel]) {
+            MSHookMessageEx(bwNodeOutputClass,
+                            copyNextSel,
+                            (IMP)hook_BWNodeOutput_copyNextSampleBuffer,
+                            (IMP *)&orig_BWNodeOutput_copyNextSampleBuffer);
+            NSLog(@"[avsd-KYC] BWNodeOutput.copyNextSampleBuffer hooked OK");
+        } else {
+            NSLog(@"[avsd-KYC] WARNING: BWNodeOutput exists but copyNextSampleBuffer NOT found!");
+            // List all methods on BWNodeOutput
+            unsigned int mc = 0;
+            Method *methods = class_copyMethodList(bwNodeOutputClass, &mc);
+            NSMutableArray *sels = [NSMutableArray array];
+            for (unsigned int i = 0; i < mc; i++) {
+                [sels addObject:NSStringFromSelector(method_getName(methods[i]))];
+            }
+            free(methods);
+            NSLog(@"[avsd-KYC] BWNodeOutput methods: %@", sels);
+        }
         NSLog(@"[avsd-KYC] KYCMetadata initialized");
+    } else {
+        NSLog(@"[avsd-KYC] WARNING: BWNodeOutput class NOT FOUND in mediaserverd!");
     }
 
     // Hook FigCaptureClientSessionMonitor
@@ -506,6 +571,8 @@ static void AVSFrameCoordinator_setup_mediaserverd(void) {
                         (IMP)hook_FigCaptureClientSessionMonitor_init,
                         (IMP *)&orig_sessionMonitorInit);
         NSLog(@"[avsd-KYC] KYCSession initialized (FigCaptureClientSessionMonitor)");
+    } else {
+        NSLog(@"[avsd-KYC] WARNING: FigCaptureClientSessionMonitor NOT FOUND");
     }
 
     // Hook BWStillImageScalerNode + BWPhotoEncoderNode para fotos
