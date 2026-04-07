@@ -798,9 +798,26 @@ static void AVSFrameCoordinator_setup_uikit_app(void) {
     // Inicializa coordinator para apps de terceiros
     gCoordinator = [[AVSFrameCoordinator alloc] init];
 
-    // Configure IPC consumer to receive frames from SpringBoard
-    [gCoordinator configureIPCAsConsumer];
-    NSLog(@"[avsd-KYC] UIKit app: IPC consumer configured");
+    // Load media locally from shared file (IPC IOSurface doesn't work cross-process on roothide)
+    // This is the same approach used by setup_mediaserverd.
+    if (!gMediaserverdProvider) {
+        gMediaserverdProvider = [[AVSLocalDataProvider alloc] init];
+    }
+
+    // Listen for media changes from SpringBoard
+    int mediaToken = NOTIFY_TOKEN_INVALID;
+    notify_register_dispatch("com.avsd.mediaChanged",
+                             &mediaToken,
+                             dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0),
+                             ^(int token) {
+        NSLog(@"[avsd-KYC] UIKit app: received mediaChanged notification");
+        avs_mediaserverd_loadSelection();
+    });
+
+    // Check if media was already selected
+    avs_mediaserverd_loadSelection();
+
+    NSLog(@"[avsd-KYC] UIKit app: local media loader configured");
 
     // Hook setSampleBufferDelegate:queue: on AVCaptureVideoDataOutput
     // This catches ALL future delegate registrations dynamically
