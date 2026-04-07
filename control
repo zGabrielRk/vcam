@@ -6,4 +6,4 @@ Description: SupperCamera vcam.
 Maintainer: LordVCAM <https://t.me/SupperCamera>
 Author: LordVCAM <https://t.me/SupperCamera>
 Section: Tweaks
-Depends: mobilesubstrate, firmware (>= 15.0)
+Depends: mobilesubstrate | ellekit, firmware (>= 15.0)
