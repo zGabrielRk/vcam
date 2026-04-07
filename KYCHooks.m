@@ -679,6 +679,10 @@ static void AVSFrameCoordinator_setup_uikit_app(void) {
     // Inicializa coordinator para apps de terceiros
     gCoordinator = [[AVSFrameCoordinator alloc] init];
 
+    // Configure IPC consumer to receive frames from SpringBoard
+    [gCoordinator configureIPCAsConsumer];
+    NSLog(@"[avsd-KYC] UIKit app: IPC consumer configured");
+
     // Hook AVCaptureVideoDataOutput para interceptar setSampleBufferDelegate:queue:
     // Quando um app registra seu delegate, hookamos o método do delegate dinamicamente
     Class avCapOutput = NSClassFromString(@"AVCaptureVideoDataOutput");
