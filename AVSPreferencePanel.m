@@ -471,28 +471,30 @@ didFinishPicking:(NSArray<PHPickerResult *> *)results {
             });
         }];
     } else if (isImage) {
-        [itemProvider loadFileRepresentationForTypeIdentifier:@"public.image"
-                                           completionHandler:^(NSURL *url, NSError *err) {
-            if (!url) {
-                NSLog(@"[avsd] Gallery: image load returned nil URL, err=%@", err);
+        [itemProvider loadObjectOfClass:[UIImage class]
+                      completionHandler:^(id<NSItemProviderReading> obj, NSError *err) {
+            UIImage *image = (UIImage *)obj;
+            if (!image) {
+                NSLog(@"[avsd] Gallery: image loadObject failed, err=%@", err);
                 return;
             }
-            // Copy to shared directory accessible by all processes (matches original)
+            NSLog(@"[avsd] Gallery: image loaded via loadObjectOfClass, size=%.0fx%.0f",
+                  image.size.width, image.size.height);
+
+            // Save to shared directory so other processes and _avs_dat_loadImg can read it
             NSString *sharedDir = @"/var/tmp/com.apple.avfcache";
-            NSString *ext = url.pathExtension ?: @"jpg";
-            NSString *sharedPath = [sharedDir stringByAppendingPathComponent:
-                                    [@"current_media." stringByAppendingString:ext]];
+            NSString *sharedPath = [sharedDir stringByAppendingPathComponent:@"current_media.jpg"];
             NSURL *sharedURL = [NSURL fileURLWithPath:sharedPath];
             NSFileManager *fm = [NSFileManager defaultManager];
             [fm createDirectoryAtPath:sharedDir withIntermediateDirectories:YES attributes:nil error:nil];
-            [fm removeItemAtURL:sharedURL error:nil];
-            NSError *copyErr = nil;
-            [fm copyItemAtURL:url toURL:sharedURL error:&copyErr];
-            if (copyErr) {
-                NSLog(@"[avsd] Gallery: image copy failed: %@", copyErr);
+            [fm removeItemAtPath:sharedPath error:nil];
+
+            NSData *jpegData = UIImageJPEGRepresentation(image, 0.95);
+            if (![jpegData writeToFile:sharedPath atomically:YES]) {
+                NSLog(@"[avsd] Gallery: image save to %@ failed", sharedPath);
                 return;
             }
-            NSLog(@"[avsd] Gallery: image copied to %@", sharedPath);
+            NSLog(@"[avsd] Gallery: image saved to %@, %lu bytes", sharedPath, (unsigned long)jpegData.length);
 
             // Write media path to shared prefs so mediaserverd can load it
             NSDictionary *mediaInfo = @{
@@ -512,6 +514,7 @@ didFinishPicking:(NSArray<PHPickerResult *> *)results {
                 [self->_activeLocalProvider _avs_dat_loadImg:sharedURL];
                 [self.coordinator enableReplacement:YES];
                 self.statsLabel.text = @"Gallery: image loaded";
+                NSLog(@"[avsd] Gallery: enableReplacement called, coordinator=%p", self.coordinator);
             });
         }];
     }
