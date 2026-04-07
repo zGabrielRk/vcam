@@ -492,7 +492,11 @@ static void AVSFrameCoordinator_setup_mediaserverd(void) {
     AVSLogWrite(@"[avsd-KYC] Gallery notification listener registered");
 
     // Diagnostic: scan for camera pipeline classes in mediaserverd
+    // Write to file so we don't miss startup logs
     {
+        NSMutableString *diag = [NSMutableString string];
+        [diag appendString:@"=== mediaserverd class scan ===\n"];
+
         NSArray *classesToProbe = @[
             @"BWNodeOutput", @"BWNode", @"BWNodeInput",
             @"BWFigCaptureDevice", @"BWFigCaptureStream",
@@ -504,31 +508,40 @@ static void AVSFrameCoordinator_setup_mediaserverd(void) {
             @"CMCaptureDevice", @"CMCaptureSession",
             @"CMCaptureOutput", @"CMCaptureVideoDataOutput",
         ];
-        NSMutableArray *found = [NSMutableArray array];
-        NSMutableArray *missing = [NSMutableArray array];
         for (NSString *name in classesToProbe) {
-            if (NSClassFromString(name)) {
-                [found addObject:name];
-            } else {
-                [missing addObject:name];
-            }
+            BOOL exists = NSClassFromString(name) != nil;
+            [diag appendFormat:@"  %@ = %@\n", name, exists ? @"FOUND" : @"MISSING"];
         }
-        NSLog(@"[avsd-KYC] DIAG mediaserverd classes FOUND: %@", found);
-        NSLog(@"[avsd-KYC] DIAG mediaserverd classes MISSING: %@", missing);
 
-        // Also scan for any class containing "Node" or "Output" or "Capture"
+        // Scan for any class starting with BW/FigCapture/CMCapture
         unsigned int classCount = 0;
         Class *allClasses = objc_copyClassList(&classCount);
-        NSMutableArray *nodeClasses = [NSMutableArray array];
-        for (unsigned int i = 0; i < classCount && nodeClasses.count < 40; i++) {
+        [diag appendFormat:@"\n=== BW/FigCapture/CMCapture classes (of %u total) ===\n", classCount];
+        for (unsigned int i = 0; i < classCount; i++) {
             NSString *cn = NSStringFromClass(allClasses[i]);
             if ([cn hasPrefix:@"BW"] || [cn hasPrefix:@"FigCapture"] ||
                 [cn hasPrefix:@"CMCapture"]) {
-                [nodeClasses addObject:cn];
+                [diag appendFormat:@"  %@\n", cn];
             }
         }
         free(allClasses);
-        NSLog(@"[avsd-KYC] DIAG BW/FigCapture/CMCapture classes: %@", nodeClasses);
+
+        // If BWNodeOutput exists, list its methods
+        Class bwClass = NSClassFromString(@"BWNodeOutput");
+        if (bwClass) {
+            unsigned int mc = 0;
+            Method *methods = class_copyMethodList(bwClass, &mc);
+            [diag appendFormat:@"\n=== BWNodeOutput methods (%u) ===\n", mc];
+            for (unsigned int i = 0; i < mc; i++) {
+                [diag appendFormat:@"  %@\n", NSStringFromSelector(method_getName(methods[i]))];
+            }
+            free(methods);
+        }
+
+        // Write to file
+        NSString *diagPath = @"/var/tmp/com.apple.avfcache/diag_mediaserverd.txt";
+        [diag writeToFile:diagPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        NSLog(@"[avsd-KYC] DIAG written to %@", diagPath);
     }
 
     // Hook BWNodeOutput
