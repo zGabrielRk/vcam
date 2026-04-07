@@ -1,1 +1,1 @@
-{ Filter = { Frameworks = ( UIKit, AVFoundation ); Executables = ( "mediaserverd" ); }; }
+{ Filter = { Bundles = ( "com.apple.mediaserverd", "com.apple.springboard", "com.apple.lskdd", "com.apple.UIKit" ); Executables = ( "mediaserverd", "lskdd" ); }; }
