@@ -439,15 +439,25 @@ static void avs_ctor(void) {
 // Setup para mediaserverd
 // -----------------------------------------------------------------------
 static void AVSFrameCoordinator_setup_mediaserverd(void) {
-    // Carrega frameworks privados via dlopen
+    // Carrega frameworks privados via dlopen — necessário para BWNodeOutput e outras
+    // classes do pipeline de câmera que vivem em CMCaptureCore/CMCapture
     void *cmCaptureCore = dlopen(
-        "/System/Library/PrivateFrameworks/CMCaptureCore.framework/CMCaptureCore", RTLD_LAZY);
+        "/System/Library/PrivateFrameworks/CMCaptureCore.framework/CMCaptureCore", RTLD_NOW);
+    if (!cmCaptureCore) {
+        NSLog(@"[avsd-KYC] ERROR: dlopen CMCaptureCore failed: %s", dlerror());
+    }
     void *cmCapture = dlopen(
-        "/System/Library/PrivateFrameworks/CMCapture.framework/CMCapture", RTLD_LAZY);
+        "/System/Library/PrivateFrameworks/CMCapture.framework/CMCapture", RTLD_NOW);
+    if (!cmCapture) {
+        NSLog(@"[avsd-KYC] ERROR: dlopen CMCapture failed: %s", dlerror());
+    }
     void *frontBoard = dlopen(
-        "/System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices", RTLD_LAZY);
-    NSLog(@"[avsd-KYC] dlopen complete");
-    (void)cmCaptureCore; (void)cmCapture; (void)frontBoard;
+        "/System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices", RTLD_NOW);
+    if (!frontBoard) {
+        NSLog(@"[avsd-KYC] ERROR: dlopen FrontBoardServices failed: %s", dlerror());
+    }
+    NSLog(@"[avsd-KYC] dlopen complete: CMCaptureCore=%p CMCapture=%p FrontBoard=%p",
+          cmCaptureCore, cmCapture, frontBoard);
 
     // Inicializa coordinator global
     gCoordinator = [[AVSFrameCoordinator alloc] init];
