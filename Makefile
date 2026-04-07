@@ -38,18 +38,16 @@ LordVCAM_FRAMEWORKS = \
 	MetalKit \
 	CoreImage \
 	VideoToolbox \
-	CoreMotion \
 	Photos \
 	PhotosUI \
 	Accelerate \
 	QuartzCore \
 	Security
 
+LordVCAM_WEAK_FRAMEWORKS = CoreMotion
+
 LordVCAM_PRIVATE_FRAMEWORKS = \
-	IOKit \
-	CMCaptureCore \
-	CMCapture \
-	FrontBoardServices
+	IOKit
 
 LordVCAM_LIBRARIES = substrate
 
